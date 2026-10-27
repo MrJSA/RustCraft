@@ -1,4 +1,5 @@
 <script>
+  import SectionTabs from '$lib/components/SectionTabs.svelte';
   import {
     ShoppingCart,
     FileText,
@@ -253,6 +254,8 @@
 </svelte:head>
 
 <div class="space-y-6 max-w-7xl mx-auto">
+  <SectionTabs section="orders" active="orders" />
+
   <!-- Header -->
   <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
     <div>

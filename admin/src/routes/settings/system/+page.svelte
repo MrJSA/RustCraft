@@ -1,9 +1,9 @@
 <script>
+  import SectionTabs from '$lib/components/SectionTabs.svelte';
   import MediaPickerModal from '$lib/components/MediaPickerModal.svelte';
   import MenuManager from '$lib/components/MenuManager.svelte';
   import PolicyManager from '$lib/components/PolicyManager.svelte';
   import { page } from '$app/stores';
-  import { goto } from '$app/navigation';
   import {
     Sliders,
     Save,
@@ -36,9 +36,6 @@
   let products = data.products || [];
 
   $: activeTab = $page.url.searchParams.get('tab') || 'hero';
-  function setTab(tab) {
-    goto(`/settings/system?tab=${tab}`, { keepFocus: true, noScroll: true, replaceState: true });
-  }
 
   let isSaving = false;
   let successNotice = '';
@@ -232,46 +229,7 @@
 </svelte:head>
 
 <div class="space-y-6 max-w-5xl mx-auto">
-  <!-- Section Tabs Navigation -->
-  <div class="flex items-center gap-2 border-b border-slate-800 pb-3 overflow-x-auto">
-    <button
-      type="button"
-      on:click={() => setTab('hero')}
-      class="px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 {activeTab === 'hero' ? 'bg-orange-600 text-white shadow-lg shadow-orange-600/25 ring-1 ring-orange-500' : 'bg-slate-900 text-slate-400 hover:text-white hover:bg-slate-800 border border-slate-800'}"
-    >
-      <Layout size={15} />
-      <span>Hero & Carousels</span>
-    </button>
-
-    <button
-      type="button"
-      on:click={() => setTab('menu')}
-      class="px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 {activeTab === 'menu' ? 'bg-orange-600 text-white shadow-lg shadow-orange-600/25 ring-1 ring-orange-500' : 'bg-slate-900 text-slate-400 hover:text-white hover:bg-slate-800 border border-slate-800'}"
-    >
-      <Menu size={15} />
-      <span>Navigation Menus</span>
-      <span class="text-[10px] px-2 py-0.5 rounded-full {activeTab === 'menu' ? 'bg-white/20 text-white' : 'bg-slate-800 text-slate-400'}">{(data.menuItems || []).length}</span>
-    </button>
-
-    <button
-      type="button"
-      on:click={() => setTab('policies')}
-      class="px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 {activeTab === 'policies' ? 'bg-orange-600 text-white shadow-lg shadow-orange-600/25 ring-1 ring-orange-500' : 'bg-slate-900 text-slate-400 hover:text-white hover:bg-slate-800 border border-slate-800'}"
-    >
-      <FileText size={15} />
-      <span>Policy CMS (Markdown)</span>
-      <span class="text-[10px] px-2 py-0.5 rounded-full {activeTab === 'policies' ? 'bg-white/20 text-white' : 'bg-slate-800 text-slate-400'}">{(data.pages || []).length}</span>
-    </button>
-
-    <button
-      type="button"
-      on:click={() => setTab('cookie')}
-      class="px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 {activeTab === 'cookie' ? 'bg-orange-600 text-white shadow-lg shadow-orange-600/25 ring-1 ring-orange-500' : 'bg-slate-900 text-slate-400 hover:text-white hover:bg-slate-800 border border-slate-800'}"
-    >
-      <Cookie size={15} />
-      <span>Cookie Consent</span>
-    </button>
-  </div>
+  <SectionTabs section="storefront" active={activeTab} counts={{ menu: (data.menuItems || []).length, policies: (data.pages || []).length }} />
 
   {#if successNotice}
     <div class="p-3.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-semibold flex items-center gap-2">

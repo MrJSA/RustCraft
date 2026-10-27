@@ -1,4 +1,5 @@
 <script>
+  import SectionTabs from '$lib/components/SectionTabs.svelte';
   import { onMount } from 'svelte';
   import { page } from '$app/stores';
   import { Star, Check, X, Trash2, AlertCircle, MessageSquare } from 'lucide-svelte';
@@ -52,6 +53,8 @@
 </script>
 
 <div class="space-y-6">
+  <SectionTabs section="products" active="reviews" />
+
   <div class="flex flex-col sm:flex-row sm:items-end justify-between gap-3">
     <div>
       <h1 class="text-2xl font-black text-white tracking-tight flex items-center gap-2.5"><MessageSquare size={24} class="text-orange-500" /> Product Reviews</h1>

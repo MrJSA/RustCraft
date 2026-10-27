@@ -1,7 +1,7 @@
 <script>
+  import SectionTabs from '$lib/components/SectionTabs.svelte';
   import MediaPickerModal from '$lib/components/MediaPickerModal.svelte';
   import { page } from '$app/stores';
-  import { goto } from '$app/navigation';
   import {
     Building,
     CreditCard,
@@ -53,9 +53,6 @@
   let adminUsers = data.adminUsers || [];
 
   $: activeTab = $page.url.searchParams.get('tab') || 'identity';
-  function setTab(tab) {
-    goto(`/settings?tab=${tab}`, { keepFocus: true, noScroll: true, replaceState: true });
-  }
 
   // --- Store Identity & Legal Form State ---
   // Empty fields stay empty: example values only appear as placeholders, never get saved
@@ -98,7 +95,6 @@
   })();
 
   // System Environment & Debugging Mode
-  let deploymentMode = settings.deployment_mode || 'development';
   let debugMode = settings.debug_mode !== undefined ? settings.debug_mode : false;
 
   let stockDisplayTemplate = settings.stock_display_template || 'In Stock ({stock} units available in central warehouse)';
@@ -164,7 +160,6 @@
         order_prefix: (orderPrefix || '').trim().toUpperCase().slice(0, 7),
         order_date_enabled: orderDateEnabled,
         stock_display_template: stockDisplayTemplate,
-        deployment_mode: deploymentMode,
         debug_mode: debugMode
       };
 
@@ -515,92 +510,7 @@
     </div>
   </div>
 
-  <!-- Tabs Navigation Bar -->
-  <div class="flex items-center gap-2 border-b border-slate-800 pb-3 overflow-x-auto">
-    <button
-      type="button"
-      on:click={() => setTab('identity')}
-      class="px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 {activeTab === 'identity' ? 'bg-orange-600 text-white shadow-lg shadow-orange-600/25 ring-1 ring-orange-500' : 'bg-slate-900 text-slate-400 hover:text-white hover:bg-slate-800 border border-slate-800'}"
-    >
-      <Building size={15} />
-      <span>Store Identity & Legal</span>
-    </button>
-
-    <button
-      type="button"
-      on:click={() => setTab('payments')}
-      class="px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 {activeTab === 'payments' ? 'bg-orange-600 text-white shadow-lg shadow-orange-600/25 ring-1 ring-orange-500' : 'bg-slate-900 text-slate-400 hover:text-white hover:bg-slate-800 border border-slate-800'}"
-    >
-      <CreditCard size={15} />
-      <span>Payment Providers</span>
-      <span class="text-[10px] px-2 py-0.5 rounded-full {activeTab === 'payments' ? 'bg-white/20 text-white' : 'bg-slate-800 text-slate-400'}">{paymentConfigs.length}</span>
-    </button>
-
-    <button
-      type="button"
-      on:click={() => setTab('email')}
-      class="px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 {activeTab === 'email' ? 'bg-orange-600 text-white shadow-lg shadow-orange-600/25 ring-1 ring-orange-500' : 'bg-slate-900 text-slate-400 hover:text-white hover:bg-slate-800 border border-slate-800'}"
-    >
-      <Mail size={15} />
-      <span>Email & Auth Policies</span>
-    </button>
-
-    <button
-      type="button"
-      on:click={() => setTab('shipping')}
-      class="px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 {activeTab === 'shipping' ? 'bg-orange-600 text-white shadow-lg shadow-orange-600/25 ring-1 ring-orange-500' : 'bg-slate-900 text-slate-400 hover:text-white hover:bg-slate-800 border border-slate-800'}"
-    >
-      <Truck size={15} />
-      <span>Shipping & Delivery</span>
-      <span class="text-[10px] px-2 py-0.5 rounded-full {activeTab === 'shipping' ? 'bg-white/20 text-white' : 'bg-slate-800 text-slate-400'}">{shippingProviders.length}</span>
-    </button>
-
-    <button
-      type="button"
-      on:click={() => setTab('media')}
-      class="px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 {activeTab === 'media' ? 'bg-orange-600 text-white shadow-lg shadow-orange-600/25 ring-1 ring-orange-500' : 'bg-slate-900 text-slate-400 hover:text-white hover:bg-slate-800 border border-slate-800'}"
-    >
-      <Image size={15} />
-      <span>Media Library</span>
-    </button>
-
-    <button
-      type="button"
-      on:click={() => setTab('users')}
-      class="px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 {activeTab === 'users' ? 'bg-orange-600 text-white shadow-lg shadow-orange-600/25 ring-1 ring-orange-500' : 'bg-slate-900 text-slate-400 hover:text-white hover:bg-slate-800 border border-slate-800'}"
-    >
-      <UserCheck size={15} />
-      <span>Admin Users & Access</span>
-      <span class="text-[10px] px-2 py-0.5 rounded-full {activeTab === 'users' ? 'bg-white/20 text-white' : 'bg-slate-800 text-slate-400'}">{adminUsers.length}</span>
-    </button>
-
-    <button
-      type="button"
-      on:click={() => setTab('export')}
-      class="px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 {activeTab === 'export' ? 'bg-orange-600 text-white shadow-lg shadow-orange-600/25 ring-1 ring-orange-500' : 'bg-slate-900 text-slate-400 hover:text-white hover:bg-slate-800 border border-slate-800'}"
-    >
-      <Download size={15} />
-      <span>Export & Backups</span>
-    </button>
-
-    <button
-      type="button"
-      on:click={() => setTab('system')}
-      class="px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 {activeTab === 'system' ? 'bg-orange-600 text-white shadow-lg shadow-orange-600/25 ring-1 ring-orange-500' : 'bg-slate-900 text-slate-400 hover:text-white hover:bg-slate-800 border border-slate-800'}"
-    >
-      <Server size={15} />
-      <span>System & Updates</span>
-    </button>
-
-    <button
-      type="button"
-      on:click={() => setTab('features')}
-      class="px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 {activeTab === 'features' ? 'bg-orange-600 text-white shadow-lg shadow-orange-600/25 ring-1 ring-orange-500' : 'bg-slate-900 text-slate-400 hover:text-white hover:bg-slate-800 border border-slate-800'}"
-    >
-      <Sparkles size={15} />
-      <span>Shop Features & Legal</span>
-    </button>
-  </div>
+  <SectionTabs section="settings" active={activeTab} counts={{ payments: paymentConfigs.length, shipping: shippingProviders.length, users: adminUsers.length }} />
 
   <!-- TAB 1: Store Identity & Legal -->
   {#if activeTab === 'identity'}
@@ -1100,29 +1010,14 @@
           </div>
         </div>
 
-        <!-- Card 4: System Deployment & Debugging Environment -->
+        <!-- Card 4: Debugging -->
         <div class="p-6 rounded-2xl bg-slate-900 border border-slate-800 shadow-xl space-y-4">
           <h2 class="text-base font-bold text-white border-b border-slate-800 pb-3 flex items-center gap-2">
             <Sliders size={18} class="text-orange-400" />
-            <span>Storefront Operating Mode & Diagnostics</span>
+            <span>Storefront Diagnostics</span>
           </h2>
 
-          <div class="grid grid-cols-1 sm:grid-cols-2 gap-6 text-xs">
-            <div>
-              <label class="block text-slate-300 font-semibold mb-1">Deployment & Processing Mode</label>
-              <select
-                bind:value={deploymentMode}
-                class="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-medium focus:outline-none focus:border-orange-500"
-              >
-                <option value="production">Live / Production (Real Gateway Transactions & Webhooks)</option>
-                <option value="development">Development / Sandbox (Simulated Transactions, Test Cards)</option>
-                <option value="staging">Staging / Pre-Release Testing</option>
-              </select>
-              <p class="text-[10px] text-slate-500 mt-1.5">
-                Switch to <strong>Live / Production</strong> when you are ready to accept real payments. Development mode enables test-mode bypasses.
-              </p>
-            </div>
-
+          <div class="text-xs">
             <div>
               <label class="block text-slate-300 font-semibold mb-1">Developer Debugging Mode</label>
               <div class="mt-2 flex items-center gap-3">

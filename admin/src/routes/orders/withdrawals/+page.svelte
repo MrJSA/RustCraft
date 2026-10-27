@@ -1,4 +1,5 @@
 <script>
+  import SectionTabs from '$lib/components/SectionTabs.svelte';
   import { onMount } from 'svelte';
   import { Undo2, CheckCircle2, AlertCircle, Mail } from 'lucide-svelte';
 
@@ -39,6 +40,8 @@
 </script>
 
 <div class="space-y-6">
+  <SectionTabs section="orders" active="withdrawals" />
+
   <div>
     <h1 class="text-2xl font-black text-white tracking-tight flex items-center gap-2.5"><Undo2 size={24} class="text-orange-500" /> Withdrawals</h1>
     <p class="text-xs text-slate-400 mt-1">

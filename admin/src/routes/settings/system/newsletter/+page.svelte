@@ -1,4 +1,5 @@
 <script>
+  import SectionTabs from '$lib/components/SectionTabs.svelte';
   import { onMount, onDestroy } from 'svelte';
   import { page } from '$app/stores';
   import { Mail, Send, Trash2, AlertCircle, CheckCircle2, Users, FlaskConical } from 'lucide-svelte';
@@ -81,6 +82,8 @@
 </script>
 
 <div class="space-y-6">
+  <SectionTabs section="storefront" active="newsletter" />
+
   <div>
     <h1 class="text-2xl font-black text-white tracking-tight flex items-center gap-2.5"><Mail size={24} class="text-orange-500" /> Newsletter</h1>
     <p class="text-xs text-slate-400 mt-1">Only subscribers who confirmed their address (double opt-in) receive newsletters. Every newsletter contains an unsubscribe link.</p>

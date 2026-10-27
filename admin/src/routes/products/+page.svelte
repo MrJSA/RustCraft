@@ -1,9 +1,9 @@
 <script>
+  import SectionTabs from '$lib/components/SectionTabs.svelte';
   import MediaPickerModal from '$lib/components/MediaPickerModal.svelte';
   import CategoryTreeNode from '$lib/components/CategoryTreeNode.svelte';
   import CouponsManager from '$lib/components/CouponsManager.svelte';
   import { page } from '$app/stores';
-  import { goto } from '$app/navigation';
   import {
     Package,
     Plus,
@@ -51,9 +51,6 @@
   }
 
   $: activeTab = $page.url.searchParams.get('tab') || 'catalog';
-  function setTab(tab) {
-    goto(`/products?tab=${tab}`, { keepFocus: true, noScroll: true, replaceState: true });
-  }
 
   async function reloadInventory() {
     try {
@@ -1295,48 +1292,7 @@
 </svelte:head>
 
 <div class="space-y-6 max-w-7xl mx-auto">
-  <!-- Section Tabs Navigation -->
-  <div class="flex items-center gap-2 border-b border-slate-800 pb-3 overflow-x-auto">
-    <button
-      type="button"
-      on:click={() => setTab('catalog')}
-      class="px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 {activeTab === 'catalog' ? 'bg-orange-600 text-white shadow-lg shadow-orange-600/25 ring-1 ring-orange-500' : 'bg-slate-900 text-slate-400 hover:text-white hover:bg-slate-800 border border-slate-800'}"
-    >
-      <Package size={15} />
-      <span>Products & BOM</span>
-      <span class="text-[10px] px-2 py-0.5 rounded-full {activeTab === 'catalog' ? 'bg-white/20 text-white' : 'bg-slate-800 text-slate-400'}">{products.length}</span>
-    </button>
-
-    <button
-      type="button"
-      on:click={() => setTab('categories')}
-      class="px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 {activeTab === 'categories' ? 'bg-orange-600 text-white shadow-lg shadow-orange-600/25 ring-1 ring-orange-500' : 'bg-slate-900 text-slate-400 hover:text-white hover:bg-slate-800 border border-slate-800'}"
-    >
-      <FolderTree size={15} />
-      <span>Categories Tree</span>
-      <span class="text-[10px] px-2 py-0.5 rounded-full {activeTab === 'categories' ? 'bg-white/20 text-white' : 'bg-slate-800 text-slate-400'}">{categories.length}</span>
-    </button>
-
-    <button
-      type="button"
-      on:click={() => setTab('stock')}
-      class="px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 {activeTab === 'stock' ? 'bg-orange-600 text-white shadow-lg shadow-orange-600/25 ring-1 ring-orange-500' : 'bg-slate-900 text-slate-400 hover:text-white hover:bg-slate-800 border border-slate-800'}"
-    >
-      <Warehouse size={15} />
-      <span>Logistics & Stock</span>
-      <span class="text-[10px] px-2 py-0.5 rounded-full {activeTab === 'stock' ? 'bg-white/20 text-white' : 'bg-slate-800 text-slate-400'}">{inventory.length}</span>
-    </button>
-
-    <button
-      type="button"
-      on:click={() => setTab('coupons')}
-      class="px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 {activeTab === 'coupons' ? 'bg-orange-600 text-white shadow-lg shadow-orange-600/25 ring-1 ring-orange-500' : 'bg-slate-900 text-slate-400 hover:text-white hover:bg-slate-800 border border-slate-800'}"
-    >
-      <Tag size={15} />
-      <span>Promo & Discount Codes</span>
-      <span class="text-[10px] px-2 py-0.5 rounded-full {activeTab === 'coupons' ? 'bg-white/20 text-white' : 'bg-slate-800 text-slate-400'}">{coupons.length}</span>
-    </button>
-  </div>
+  <SectionTabs section="products" active={activeTab} counts={{ catalog: products.length, categories: categories.length, stock: inventory.length, coupons: coupons.length }} />
 
   {#if activeTab === 'catalog'}
     <!-- Header -->
