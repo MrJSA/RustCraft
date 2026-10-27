@@ -1,0 +1,8 @@
+# Keep Unix line endings everywhere (Docker images, shell, Caddyfile) and on Windows checkouts
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.webp binary
+*.ico binary
+*.ttf binary
+*.pdf binary

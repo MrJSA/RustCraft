@@ -1,0 +1,11 @@
+# Built-in HTTPS reverse proxy (optional, enable with COMPOSE_PROFILES=proxy).
+# Certificates are obtained automatically from Let's Encrypt for both domains.
+{$SHOP_DOMAIN} {
+	encode zstd gzip
+	reverse_proxy storefront:3000
+}
+
+{$ADMIN_DOMAIN} {
+	encode zstd gzip
+	reverse_proxy admin:4000
+}

@@ -1,0 +1,165 @@
+# Fixed project name so the built-in updater manages exactly this stack
+name: rustwebshop
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: shop_db
+      POSTGRES_USER: shop_user
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-local_dev_password}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - shop_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U shop_user -d shop_db"]
+      interval: 3s
+      timeout: 3s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://shop_user:${DB_PASSWORD:-local_dev_password}@db:5432/shop_db
+      PORT: 8000
+      RUST_LOG: ${RUST_LOG:-info}
+      # Optional: leave empty and a random signing key is generated and stored in the database
+      JWT_SECRET: ${JWT_SECRET:-}
+      # Optional initial admin password (min. 12 chars); otherwise a random one is printed in the log once
+      ADMIN_INITIAL_PASSWORD: ${ADMIN_INITIAL_PASSWORD:-}
+      # Public storefront URL used in links inside emails (verification, password reset)
+      SHOP_PUBLIC_URL: ${SHOP_PUBLIC_URL:-http://localhost:8080}
+      # Public admin URL used in links inside admin notification emails (low-stock alerts)
+      ADMIN_PUBLIC_URL: ${ADMIN_PUBLIC_URL:-http://localhost:4000}
+      UPDATER_URL: http://updater:9000
+      UPDATER_TOKEN_FILE: /secrets/updater_token
+    # Debug access from this machine only — never exposed to the network
+    ports:
+      - "127.0.0.1:8081:8000"
+    volumes:
+      - uploads_data:/app/uploads
+      - updater_secrets:/secrets:ro
+    depends_on:
+      db:
+        condition: service_healthy
+      repo-move:
+        condition: service_completed_successfully
+    networks:
+      - shop_net
+      - updater_net
+
+  storefront:
+    build:
+      context: ./storefront
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      PORT: 3000
+      BACKEND_INTERNAL_URL: http://backend:8000
+      ORIGIN: ${SHOP_PUBLIC_URL:-http://localhost:8080}
+      BODY_SIZE_LIMIT: 50M
+    ports:
+      # PUBLISH_ADDR=127.0.0.1 when a reverse proxy (built-in or your own) serves the domains
+      - "${PUBLISH_ADDR:-0.0.0.0}:${STOREFRONT_PORT:-8080}:3000"
+    depends_on:
+      - backend
+    networks:
+      - shop_net
+
+  admin:
+    build:
+      context: ./admin
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      PORT: 4000
+      BACKEND_INTERNAL_URL: http://backend:8000
+      ORIGIN: ${ADMIN_PUBLIC_URL:-http://localhost:4000}
+      # Public storefront URL for the "Open Storefront" and policy preview links
+      SHOP_PUBLIC_URL: ${SHOP_PUBLIC_URL:-http://localhost:8080}
+      BODY_SIZE_LIMIT: 50M
+    ports:
+      - "${PUBLISH_ADDR:-0.0.0.0}:${ADMIN_PORT:-4000}:4000"
+    depends_on:
+      - backend
+    networks:
+      - shop_net
+
+  # Checks GitHub for new releases, updates the shop and applies domain settings (Admin → Settings → System).
+  # It needs the Docker socket to rebuild the other services; it has no published port and only the backend can reach it.
+  updater:
+    build:
+      context: ./updater
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      RUST_LOG: info
+    volumes:
+      - ./:/repo
+      - /var/run/docker.sock:/var/run/docker.sock
+      - updater_secrets:/secrets
+    networks:
+      - updater_net
+
+  # The shop moved to github.com/MrJSA/RustCraft: points existing installations there once, so updates keep arriving.
+  # Runs before the backend on every start and changes nothing when the address is already correct.
+  repo-move:
+    build:
+      context: ./updater
+      dockerfile: Dockerfile
+    restart: "no"
+    volumes:
+      - ./:/repo
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        git config --global --add safe.directory /repo
+        url=$$(git -C /repo remote get-url origin 2>/dev/null)
+        case "$$url" in
+          *github.com[:/]MrJSA/rustwebshop|*github.com[:/]MrJSA/rustwebshop.git|*github.com[:/]MrJSA/rustwebshop/)
+            git -C /repo remote set-url origin https://github.com/MrJSA/RustCraft.git && echo "Updates now come from github.com/MrJSA/RustCraft" ;;
+        esac
+        exit 0
+    network_mode: none
+
+  # Optional HTTPS reverse proxy with automatic Let's Encrypt certificates.
+  # Enable with COMPOSE_PROFILES=proxy plus SHOP_DOMAIN / ADMIN_DOMAIN (or from the admin settings).
+  proxy:
+    build:
+      context: ./deploy/proxy
+    profiles: ["proxy"]
+    restart: unless-stopped
+    environment:
+      SHOP_DOMAIN: ${SHOP_DOMAIN:-}
+      ADMIN_DOMAIN: ${ADMIN_DOMAIN:-}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - storefront
+      - admin
+    networks:
+      - shop_net
+
+networks:
+  shop_net:
+    driver: bridge
+  # Private link between backend and updater only
+  updater_net:
+    driver: bridge
+
+volumes:
+  pgdata:
+  uploads_data:
+  updater_secrets:
+  caddy_data:
+  caddy_config:
