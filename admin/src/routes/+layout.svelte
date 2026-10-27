@@ -308,16 +308,21 @@
         {/each}
       </nav>
 
-      <!-- Bottom Storefront Link -->
-      <div class="p-4 border-t border-slate-800 bg-slate-900/90">
+      <!-- Bottom Storefront Link & Database Status -->
+      <div class="p-4 border-t border-slate-800 bg-slate-900/90 space-y-2">
         <a
           href={data.shopUrl}
           target="_blank"
-          class="w-full py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold flex items-center justify-center gap-2 transition-colors border border-slate-700"
+          rel="noopener noreferrer"
+          class="w-full py-2 px-3 rounded-xl bg-orange-600 hover:bg-orange-500 text-white text-xs font-bold flex items-center justify-center gap-2 transition-colors border border-orange-500 shadow-md"
         >
           <span>Open Storefront</span>
-          <ExternalLink size={13} class="text-orange-400" />
+          <ExternalLink size={13} />
         </a>
+        <div class="w-full py-2 px-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-semibold flex items-center justify-center gap-2">
+          <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+          <span>PostgreSQL Active</span>
+        </div>
       </div>
     </aside>
 
@@ -351,16 +356,11 @@
         </div>
 
         <div class="flex items-center gap-4">
-          <div class="hidden sm:flex items-center gap-2 px-3 py-1 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-semibold">
-            <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-            <span>PostgreSQL Active</span>
-          </div>
-
           <!-- User Badge & Actions -->
           <div class="flex items-center gap-2">
             <button
               on:click={openAccountModal}
-              class="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition-colors"
+              class="h-10 flex items-center gap-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition-colors"
               title="Account & Security Settings"
             >
               <User size={14} class="text-orange-400" />
@@ -375,21 +375,12 @@
 
             <button
               on:click={handleLogout}
-              class="p-2 rounded-xl bg-slate-800 hover:bg-rose-950/40 hover:text-rose-400 text-slate-400 border border-slate-700 transition-colors"
+              class="h-10 w-10 flex items-center justify-center rounded-xl bg-slate-800 hover:bg-rose-950/40 hover:text-rose-400 text-slate-400 border border-slate-700 transition-colors"
               title="Logout"
             >
               <LogOut size={16} />
             </button>
           </div>
-
-          <a
-            href={data.shopUrl}
-            target="_blank"
-            class="px-4 py-2 rounded-xl bg-orange-600 hover:bg-orange-500 text-white text-xs font-bold transition-all shadow-md flex items-center gap-1.5"
-          >
-            <span>Live Store</span>
-            <ExternalLink size={13} />
-          </a>
         </div>
       </header>
 
