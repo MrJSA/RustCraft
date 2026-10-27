@@ -303,7 +303,7 @@ async fn create_backup(pool: &PgPool, settings: &BackupSettings) -> Result<Backu
     let tag = format!("{}{}", TAG_PREFIX, stamp);
     let title = format!("Backup {} UTC", now.format("%Y-%m-%d %H:%M"));
     let body = format!(
-        "Automatic backup of **{}**.\n\n- Database: complete dump (`database.sql`)\n- Uploaded files: {}\n- Size: {}\n\nTo restore: shop admin → Settings → Export & Backups → Restore a Backup (see `docs/BACKUP.md` in the shop repository).",
+        "Automatic backup of **{}**.\n\n- Database: complete dump (`database.sql`)\n- Uploaded files: {}\n- Size: {}\n\nTo restore: shop admin → Settings → Export & Backups → Restore a Backup (see https://github.com/MrJSA/RustCraft/wiki/Restoring-a-Backup).",
         if store_name.is_empty() { "the shop" } else { &store_name },
         if settings.include_media { format!("{} file(s) in `uploads/`", file_count) } else { "not included".to_string() },
         human_size(size)
@@ -424,7 +424,7 @@ Or on the command line (in the shop folder on the server):
   docker compose start backend storefront admin
   docker compose cp uploads/. backend:/app/uploads/
 
-Full guide: docs/BACKUP.md in the shop repository.
+Full guide: https://github.com/MrJSA/RustCraft/wiki/Restoring-a-Backup
 ";
 
 pub(crate) fn human_size(bytes: u64) -> String {
@@ -770,7 +770,7 @@ complete database dump (`database.sql`) and the uploaded files (`uploads/`).
 
 Keep this repository **private** — the backups contain customer data.
 To restore a backup open the shop admin → *Settings → Export & Backups* → *Restore a Backup*
-(details in `docs/BACKUP.md` of the shop software).
+(details: https://github.com/MrJSA/RustCraft/wiki/Backups).
 ";
 
 #[cfg(test)]

@@ -284,7 +284,7 @@
           </li>
           <li>Copy the token (starts with <code class="text-slate-200">github_pat_</code>), paste it below together with the repository name, click <em>Test connection</em> and then <em>Save</em>.</li>
         </ol>
-        <p class="px-5 pb-4 text-[11px] text-slate-500">The full guide including how to restore a backup is in <code>docs/BACKUP.md</code> of the shop software.</p>
+        <p class="px-5 pb-4 text-[11px] text-slate-500">The full guide including how to restore a backup is in the <a href="https://github.com/MrJSA/RustCraft/wiki/Backups" target="_blank" rel="noopener noreferrer" class="text-sky-400 hover:underline">RustCraft wiki</a>.</p>
       {/if}
     </div>
 

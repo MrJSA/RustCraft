@@ -2,7 +2,7 @@
 
 A self-hosted webshop with a **Rust** backend (Axum, SQLx, PostgreSQL) and **SvelteKit** storefront and admin dashboard, shipped as one Docker Compose stack with one-click updates.
 
-> **Installing on a server?** Follow **[INSTALL.md](docs/INSTALL.md)**: domains, automatic HTTPS, first login, backups and updates.
+> **Installing on a server?** Follow the **[Installation guide](https://github.com/MrJSA/RustCraft/wiki/Installation)** in the [wiki](https://github.com/MrJSA/RustCraft/wiki): domains, automatic HTTPS, first login, backups and updates.
 
 ## Architecture
 
@@ -81,5 +81,15 @@ Database migrations run automatically when the backend starts.
 - Product weights and weight-based shipping rates; delivery times; product safety information (GPSR).
 - VAT-free orders for EU businesses with a live VIES check (intra-Community supply / reverse charge).
 - Withdrawal button with confirmation emails, invoices stored unchangeable and credit notes on refunds.
-- Automatic daily, weekly or monthly backups of the complete database and all uploads to a private GitHub repository (see [BACKUP.md](docs/BACKUP.md)).
-- Updates from the admin with an automatic database backup (see [INSTALL.md](docs/INSTALL.md#11-updates)).
+- Automatic daily, weekly or monthly backups of the complete database and all uploads to a private GitHub repository (see [Backups](https://github.com/MrJSA/RustCraft/wiki/Backups)).
+- Updates from the admin with an automatic database backup (see [Updates](https://github.com/MrJSA/RustCraft/wiki/Updates)).
+
+## Publishing a new release
+
+1. Update `VERSION` (e.g. `1.5.0`) and commit.
+2. Create and push a tag with release notes:
+   ```bash
+   git tag -a v1.5.0 -m "What changed in this release"
+   git push origin master --follow-tags
+   ```
+3. Every installation now offers *Update now* in *Settings → System & Updates*.
