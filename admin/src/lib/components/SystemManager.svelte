@@ -174,7 +174,7 @@
         <p class="text-[11px] text-slate-400 mt-1 leading-relaxed">
           Point the DNS A/AAAA records of both (sub)domains to this server first. With the built-in HTTPS proxy, ports 80 and 443 must be free
           and certificates are created automatically. If your server already runs nginx, Apache, Traefik or Caddy, turn the built-in proxy off and
-          forward the domains to ports 8080 (shop) and 4000 (admin) as described in INSTALL.md.
+          forward the domains to ports 8080 (shop) and 4000 (admin) as described in docs/INSTALL.md.
         </p>
       </div>
       {#if domainError}<div class="p-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs">{domainError}</div>{/if}
