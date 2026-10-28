@@ -2,6 +2,8 @@
 
 A self-hosted webshop with a **Rust** backend (Axum, SQLx, PostgreSQL) and **SvelteKit** storefront and admin dashboard, shipped as one Docker Compose stack with one-click updates.
 
+**See it in use:** [shop.mrjsa.com](https://shop.mrjsa.com) runs on RustCraft.
+
 > **Installing on a server?** Follow the **[Installation guide](https://github.com/MrJSA/RustCraft/wiki/Installation)** in the [wiki](https://github.com/MrJSA/RustCraft/wiki): domains, automatic HTTPS, first login, backups and updates.
 
 ## Architecture
