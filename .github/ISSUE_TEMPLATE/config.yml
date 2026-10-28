@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Rules for issues and feature requests
+    url: https://github.com/MrJSA/RustCraft/wiki/Reporting-Issues
+    about: Please read these first and search the existing issues before you open a new one.
+  - name: Troubleshooting
+    url: https://github.com/MrJSA/RustCraft/wiki/Troubleshooting
+    about: Answers to common setup problems (HTTPS, emails, updater, backups).

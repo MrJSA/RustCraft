@@ -1,0 +1,60 @@
+name: Bug report
+description: Something in the shop or the admin does not work as described.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting! Please read the [rules for issues](https://github.com/MrJSA/RustCraft/wiki/Reporting-Issues) first.
+        **Never post passwords, API keys, the content of `.env` or customer data.** Security problems are not reported here.
+  - type: checkboxes
+    id: searched
+    attributes:
+      label: Before you open this issue
+      options:
+        - label: I searched the [open and closed issues](https://github.com/MrJSA/RustCraft/issues?q=is%3Aissue) and this bug is not reported yet.
+          required: true
+        - label: I removed private data (passwords, keys, customer names and addresses) from everything I post.
+          required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version and channel
+      description: Settings → System & Updates
+      placeholder: v1.5.0 stable / v1.6.0-beta.2 beta
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open the admin → Orders
+        2. Click …
+        3. …
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened instead
+      description: Exact error message and screenshots help a lot.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Relevant lines of `docker compose logs backend` (or storefront, admin, updater).
+      render: text
+  - type: input
+    id: setup
+    attributes:
+      label: Setup
+      placeholder: Built-in HTTPS proxy / own reverse proxy, Stripe test mode, …

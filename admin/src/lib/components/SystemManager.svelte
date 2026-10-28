@@ -17,6 +17,8 @@
   let httpsProxy = true;
   let domainError = '';
   let domainNotice = '';
+  let channelNotice = '';
+  let savingChannel = false;
 
   async function api(path, options = {}) {
     const res = await fetch(`/api/v1/admin/system/${path}`, {
@@ -62,6 +64,24 @@
       startPolling();
     } catch (e) {
       error = e.message;
+    }
+  }
+
+  async function setChannel(channel) {
+    if (channel === status?.channel) return;
+    if (channel === 'beta' && !confirm('Switch to beta releases? Betas contain new features before everyone else gets them and may still have bugs. Use them on a test installation, not on your live shop. Going back to stable later does not downgrade: you stay on the beta until the next stable release.')) return;
+    savingChannel = true;
+    error = '';
+    channelNotice = '';
+    try {
+      const res = await api('channel', { method: 'PUT', body: JSON.stringify({ channel }) });
+      status = { ...status, channel: res.channel };
+      check = null;
+      channelNotice = res.channel === 'beta' ? 'Beta channel active. Check for updates to see the newest beta.' : 'Stable channel active.';
+    } catch (e) {
+      error = e.message;
+    } finally {
+      savingChannel = false;
     }
   }
 
@@ -135,11 +155,39 @@
         </button>
       </div>
 
+      <div class="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-2">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div>
+            <div class="text-xs font-bold text-white">Update channel</div>
+            <p class="text-[11px] text-slate-400 mt-0.5">Stable is for live shops. Beta gets new features first, for testing.</p>
+          </div>
+          {#if status && status.channel}
+            <div class="inline-flex rounded-xl bg-slate-900 border border-slate-800 p-1 text-xs font-bold">
+              {#each ['stable', 'beta'] as ch}
+                <button
+                  type="button"
+                  on:click={() => setChannel(ch)}
+                  disabled={savingChannel || job?.running}
+                  class="px-4 py-1.5 rounded-lg capitalize transition-colors disabled:opacity-50 {status.channel === ch ? (ch === 'beta' ? 'bg-amber-600 text-white' : 'bg-orange-600 text-white') : 'text-slate-400 hover:text-white'}"
+                >{ch}</button>
+              {/each}
+            </div>
+          {/if}
+        </div>
+        {#if status && !status.channel}
+          <p class="text-[11px] text-amber-300">
+            The updater on this server is too old to switch channels. Run once on the server:
+            <code class="font-mono text-amber-200">cd /opt/rustwebshop && sudo docker compose up -d --build updater</code>
+          </p>
+        {/if}
+        {#if channelNotice}<p class="text-[11px] text-emerald-400">{channelNotice}</p>{/if}
+      </div>
+
       {#if check}
         {#if check.update_available}
           <div class="p-4 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 space-y-3">
             <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div class="text-sm text-emerald-300 font-bold">Version v{check.latest_version} is available</div>
+              <div class="text-sm text-emerald-300 font-bold">Version v{check.latest_version} is available{check.latest_version.includes('-beta') ? ' (beta)' : ''}</div>
               <button type="button" on:click={startUpdate} disabled={job?.running} class="px-4 py-2.5 rounded-xl bg-orange-600 hover:bg-orange-500 disabled:opacity-50 text-white text-xs font-bold flex items-center gap-2">
                 <DownloadCloud size={15} /> Update now
               </button>

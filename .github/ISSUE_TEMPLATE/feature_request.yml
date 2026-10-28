@@ -1,0 +1,47 @@
+name: Feature request
+description: Suggest a new feature or a change.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please read the [rules for feature requests](https://github.com/MrJSA/RustCraft/wiki/Reporting-Issues#3-feature-suggestions) first.
+        If the idea already exists, add a 👍 reaction there instead of opening a new issue. One idea per issue.
+  - type: checkboxes
+    id: searched
+    attributes:
+      label: Before you open this issue
+      options:
+        - label: I searched the [open and closed issues](https://github.com/MrJSA/RustCraft/issues?q=is%3Aissue) and this idea is not suggested yet.
+          required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do, and what stops you today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Your proposal
+      description: How could it work in the shop or the admin?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives and workarounds
+  - type: textarea
+    id: who
+    attributes:
+      label: Who it helps
+      description: Only your shop, or shops in general (e.g. a legal requirement, with a link)?
+  - type: dropdown
+    id: implement
+    attributes:
+      label: Would you like to implement it yourself?
+      description: If yes, please wait for an answer here before you start. Pull requests go to the `beta` branch.
+      options:
+        - "No"
+        - "Yes, after we agreed on the approach"

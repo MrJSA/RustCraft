@@ -102,6 +102,7 @@ pub fn admin_router(pool: PgPool) -> Router<PgPool> {
         .route("/system/check", post(admin_system_check))
         .route("/system/update", post(admin_system_update))
         .route("/system/job", get(admin_system_job))
+        .route("/system/channel", put(admin_put_update_channel))
         .route("/system/domains", get(admin_get_domains).put(admin_put_domains))
         .route("/export/store-data", get(admin_export_store_data))
         .route("/export/media", get(admin_export_media_library))
@@ -4527,6 +4528,15 @@ async fn admin_system_update(Extension(admin): Extension<CurrentAdmin>) -> Resul
 async fn admin_system_job(Extension(admin): Extension<CurrentAdmin>) -> Result<impl IntoResponse, (StatusCode, String)> {
     require_superadmin(&admin)?;
     updater_request(reqwest::Method::GET, "/job", None).await
+}
+
+async fn admin_put_update_channel(
+    Extension(admin): Extension<CurrentAdmin>,
+    Json(payload): Json<serde_json::Value>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    require_superadmin(&admin)?;
+    tracing::warn!("Update channel changed by admin '{}'", admin.username);
+    updater_request(reqwest::Method::PUT, "/channel", Some(payload)).await
 }
 
 async fn admin_get_domains(Extension(admin): Extension<CurrentAdmin>) -> Result<impl IntoResponse, (StatusCode, String)> {

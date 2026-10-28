@@ -1,5 +1,6 @@
 //! Shop updater: checks GitHub (git tags) for new releases, updates the installation and applies
-//! domain settings. It runs next to the shop with access to the project checkout and the Docker
+//! domain settings. Stable installations follow `vX.Y.Z` tags; with `UPDATE_CHANNEL=beta` in `.env`
+//! they also get beta tags `vX.Y.Z-beta.N`. It runs next to the shop with access to the project checkout and the Docker
 //! daemon, has no published port and only accepts requests from the backend (shared token).
 
 use axum::{
@@ -42,26 +43,85 @@ type ApiResult = Result<Json<JsonValue>, (StatusCode, String)>;
 
 // ---------------------------------------------------------------- versions
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct Version(u64, u64, u64);
+/// `X.Y.Z` or the beta `X.Y.Z-beta.N` (`.3` is the beta number; a release sorts after its betas).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Version(u64, u64, u64, Option<u64>);
 
 impl Version {
     fn parse(s: &str) -> Option<Self> {
         let s = s.trim().trim_start_matches('v');
-        let mut parts = s.split('.').map(|p| p.parse::<u64>().ok());
-        let v = Version(parts.next()??, parts.next()??, parts.next()??);
+        let (core, beta) = match s.split_once('-') {
+            Some((core, pre)) => (core, Some(pre.strip_prefix("beta.")?.parse::<u64>().ok()?)),
+            None => (s, None),
+        };
+        let mut parts = core.split('.').map(|p| p.parse::<u64>().ok());
+        let v = Version(parts.next()??, parts.next()??, parts.next()??, beta);
         parts.next().is_none().then_some(v)
+    }
+
+    fn is_beta(&self) -> bool {
+        self.3.is_some()
+    }
+}
+
+impl Ord for Version {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        (self.0, self.1, self.2)
+            .cmp(&(other.0, other.1, other.2))
+            .then_with(|| match (self.3, other.3) {
+                (None, None) => std::cmp::Ordering::Equal,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (Some(a), Some(b)) => a.cmp(&b),
+            })
+    }
+}
+
+impl PartialOrd for Version {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
     }
 }
 
 impl std::fmt::Display for Version {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}.{}.{}", self.0, self.1, self.2)
+        write!(f, "{}.{}.{}", self.0, self.1, self.2)?;
+        match self.3 {
+            Some(n) => write!(f, "-beta.{}", n),
+            None => Ok(()),
+        }
     }
 }
 
-fn latest_tag(tags: &str) -> Option<Version> {
-    tags.lines().filter_map(Version::parse).max()
+/// Which releases an installation follows (`UPDATE_CHANNEL` in `.env`, stable when missing).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Channel {
+    Stable,
+    Beta,
+}
+
+impl Channel {
+    fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_lowercase().as_str() {
+            "" | "stable" => Some(Channel::Stable),
+            "beta" => Some(Channel::Beta),
+            _ => None,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Channel::Stable => "stable",
+            Channel::Beta => "beta",
+        }
+    }
+}
+
+fn latest_tag(tags: &str, channel: Channel) -> Option<Version> {
+    tags.lines()
+        .filter_map(Version::parse)
+        .filter(|v| channel == Channel::Beta || !v.is_beta())
+        .max()
 }
 
 // ---------------------------------------------------------------- .env handling
@@ -146,6 +206,11 @@ async fn step(state: &Shared, title: &str, program: &str, args: &[&str]) -> Resu
     out
 }
 
+async fn current_channel(repo: &Path) -> Channel {
+    let env = tokio::fs::read_to_string(repo.join(".env")).await.unwrap_or_default();
+    Channel::parse(&read_env_value(&env, "UPDATE_CHANNEL")).unwrap_or(Channel::Stable)
+}
+
 async fn current_version(repo: &Path) -> Option<Version> {
     tokio::fs::read_to_string(repo.join("VERSION")).await.ok().and_then(|v| Version::parse(&v))
 }
@@ -198,6 +263,7 @@ async fn status(State(state): State<Shared>, headers: HeaderMap) -> ApiResult {
     Ok(Json(json!({
         "current_version": current_version(&state.repo).await.map(|v| v.to_string()),
         "current_commit": commit.trim(),
+        "channel": current_channel(&state.repo).await.as_str(),
         "remote": state.remote,
         "job": job
     })))
@@ -211,7 +277,8 @@ async fn check(State(state): State<Shared>, headers: HeaderMap) -> ApiResult {
         .map_err(|e| (StatusCode::BAD_GATEWAY, format!("Could not reach the update server: {}", e)))?;
     let tags = run(&state.repo, "git", &["tag", "--list", "v*"]).await.unwrap_or_default();
     let current = current_version(&state.repo).await;
-    let latest = latest_tag(&tags);
+    let channel = current_channel(&state.repo).await;
+    let latest = latest_tag(&tags, channel);
     let notes = match &latest {
         Some(v) => run(&state.repo, "git", &["tag", "-l", "--format=%(contents)", &format!("v{}", v)]).await.unwrap_or_default(),
         None => String::new(),
@@ -220,6 +287,7 @@ async fn check(State(state): State<Shared>, headers: HeaderMap) -> ApiResult {
         "current_version": current.as_ref().map(|v| v.to_string()),
         "latest_version": latest.as_ref().map(|v| v.to_string()),
         "update_available": matches!((&current, &latest), (Some(c), Some(l)) if l > c),
+        "channel": channel.as_str(),
         "release_notes": notes.trim()
     })))
 }
@@ -239,12 +307,13 @@ async fn perform_update(state: &Shared) -> Result<(), String> {
     step(state, "Fetching releases", "git", &["fetch", "--tags", "--force", &state.remote]).await?;
     let tags = run(&state.repo, "git", &["tag", "--list", "v*"]).await?;
     let current = current_version(&state.repo).await.ok_or("VERSION file missing or invalid")?;
-    let target = latest_tag(&tags).ok_or("No release tags (vX.Y.Z) found")?;
+    let channel = current_channel(&state.repo).await;
+    let target = latest_tag(&tags, channel).ok_or("No release tags (vX.Y.Z) found")?;
     if target <= current {
-        log(state, format!("Already up to date ({})", current)).await;
+        log(state, format!("Already up to date ({}, {} channel)", current, channel.as_str())).await;
         return Ok(());
     }
-    log(state, format!("Updating {} → {}", current, target)).await;
+    log(state, format!("Updating {} → {} ({} channel)", current, target, channel.as_str())).await;
 
     let dirty = run(&state.repo, "git", &["status", "--porcelain", "--untracked-files=no"]).await?;
     if !dirty.trim().is_empty() {
@@ -288,6 +357,29 @@ async fn job(State(state): State<Shared>, headers: HeaderMap) -> ApiResult {
     authorize(&state, &headers)?;
     let job = state.job.lock().await.clone();
     Ok(Json(serde_json::to_value(job).unwrap_or_default()))
+}
+
+#[derive(Deserialize)]
+struct ChannelConfig {
+    channel: String,
+}
+
+/// Switches between stable releases and beta releases (stored as `UPDATE_CHANNEL` in `.env`).
+/// Nothing is installed here; the next check/update uses the new channel.
+async fn put_channel(State(state): State<Shared>, headers: HeaderMap, Json(cfg): Json<ChannelConfig>) -> ApiResult {
+    authorize(&state, &headers)?;
+    let channel = Channel::parse(&cfg.channel)
+        .ok_or_else(|| (StatusCode::BAD_REQUEST, "The update channel is either stable or beta".to_string()))?;
+    if state.job.lock().await.running {
+        return Err((StatusCode::CONFLICT, "Wait until the running task has finished".to_string()));
+    }
+    let path = state.repo.join(".env");
+    let env = tokio::fs::read_to_string(&path).await.unwrap_or_default();
+    tokio::fs::write(&path, upsert_env(&env, &[("UPDATE_CHANNEL", channel.as_str().to_string())]))
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("could not write .env: {}", e)))?;
+    info!("Update channel set to {}", channel.as_str());
+    Ok(Json(json!({ "channel": channel.as_str() })))
 }
 
 #[derive(Deserialize)]
@@ -396,6 +488,7 @@ async fn main() {
         .route("/update", post(update))
         .route("/job", get(job))
         .route("/config", get(get_config).put(put_config))
+        .route("/channel", axum::routing::put(put_channel))
         .with_state(state);
 
     let addr = std::net::SocketAddr::from(([0, 0, 0, 0], 9000));
@@ -410,10 +503,26 @@ mod tests {
 
     #[test]
     fn picks_the_highest_semver_tag() {
-        assert_eq!(latest_tag("v1.0.0\nv1.10.0\nv1.9.3\nfoo\nv2.0\n"), Some(Version(1, 10, 0)));
-        assert!(Version(1, 10, 0) > Version(1, 9, 9));
-        assert_eq!(Version::parse("1.2.3\n"), Some(Version(1, 2, 3)));
+        assert_eq!(latest_tag("v1.0.0\nv1.10.0\nv1.9.3\nfoo\nv2.0\n", Channel::Stable), Some(Version(1, 10, 0, None)));
+        assert!(Version(1, 10, 0, None) > Version(1, 9, 9, None));
+        assert_eq!(Version::parse("1.2.3\n"), Some(Version(1, 2, 3, None)));
         assert_eq!(Version::parse("1.2"), None);
+    }
+
+    #[test]
+    fn beta_tags_only_on_the_beta_channel() {
+        let tags = "v1.4.2\nv1.5.0-beta.1\nv1.5.0-beta.10\nv1.5.0-beta.2\nv1.5.0-rc.1\n";
+        assert_eq!(latest_tag(tags, Channel::Stable), Some(Version(1, 4, 2, None)));
+        assert_eq!(latest_tag(tags, Channel::Beta), Some(Version(1, 5, 0, Some(10))));
+        // The release follows its betas, so beta installations move on to it
+        let released = format!("{}v1.5.0\n", tags);
+        assert_eq!(latest_tag(&released, Channel::Beta), Some(Version(1, 5, 0, None)));
+        assert!(Version(1, 5, 0, Some(3)) > Version(1, 4, 9, None));
+        assert_eq!(Version::parse("v1.5.0-beta.2").unwrap().to_string(), "1.5.0-beta.2");
+        assert_eq!(Version::parse("1.5.0-beta"), None);
+        assert_eq!(Channel::parse(""), Some(Channel::Stable));
+        assert_eq!(Channel::parse("Beta"), Some(Channel::Beta));
+        assert_eq!(Channel::parse("nightly"), None);
     }
 
     #[test]

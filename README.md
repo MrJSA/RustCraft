@@ -82,14 +82,30 @@ Database migrations run automatically when the backend starts.
 - VAT-free orders for EU businesses with a live VIES check (intra-Community supply / reverse charge).
 - Withdrawal button with confirmation emails, invoices stored unchangeable and credit notes on refunds.
 - Automatic daily, weekly or monthly backups of the complete database and all uploads to a private GitHub repository (see [Backups](https://github.com/MrJSA/RustCraft/wiki/Backups)).
-- Updates from the admin with an automatic database backup (see [Updates](https://github.com/MrJSA/RustCraft/wiki/Updates)).
+- Updates from the admin with an automatic database backup (see [Updates](https://github.com/MrJSA/RustCraft/wiki/Updates)), on the stable or the beta channel.
 
-## Publishing a new release
+## Bugs and feature requests
 
-1. Update `VERSION` (e.g. `1.5.0`) and commit.
-2. Create and push a tag with release notes:
+Please read the [rules for issues](https://github.com/MrJSA/RustCraft/wiki/Reporting-Issues) and search the existing issues before opening a new one.
+
+## Branches and releases
+
+| Branch | Tags | Installations on |
+| :--- | :--- | :--- |
+| `master` | `v1.6.0` | **Stable** channel (default, for live shops) |
+| `beta` | `v1.6.0-beta.1` | **Beta** channel (testing, *Settings → System & Updates → Update channel*) |
+
+Development and pull requests go to `beta`. See [Release Channels](https://github.com/MrJSA/RustCraft/wiki/Release-Channels) for details.
+
+1. **Beta:** on `beta`, set `VERSION` (e.g. `1.6.0-beta.1`), commit, then
    ```bash
-   git tag -a v1.5.0 -m "What changed in this release"
+   git tag -a v1.6.0-beta.1 -m "What is new in this beta"
+   git push origin beta --follow-tags
+   ```
+2. **Stable:** merge `beta` into `master`, set `VERSION` (e.g. `1.6.0`), commit, then
+   ```bash
+   git tag -a v1.6.0 -m "What changed in this release"
    git push origin master --follow-tags
    ```
-3. Every installation now offers *Update now* in *Settings → System & Updates*.
+   and merge `master` back into `beta`.
+3. Installations on the matching channel now offer *Update now* in *Settings → System & Updates*.
