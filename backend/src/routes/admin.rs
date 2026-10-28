@@ -35,6 +35,7 @@ pub fn admin_router(pool: PgPool) -> Router<PgPool> {
         .route("/auth/status", get(admin_auth_status))
         .route("/auth/me", get(admin_auth_status))
         .route("/auth/change-credentials", post(admin_change_credentials).put(admin_change_credentials))
+        .route("/auth/notifications", put(admin_update_own_notifications))
         // Admin Users Management
         .route("/users", get(admin_list_users).post(admin_create_user))
         .route("/users/:id", put(admin_update_user).delete(admin_delete_user))
@@ -178,8 +179,29 @@ async fn admin_auth_status(Extension(admin): Extension<CurrentAdmin>) -> impl In
         "email": admin.email,
         "role": admin.role,
         "is_default": admin.is_default,
-        "permissions": admin.permissions
+        "permissions": admin.permissions,
+        "order_notifications": admin.order_notifications
     }))
+}
+
+#[derive(Deserialize)]
+struct OwnNotificationsRequest {
+    order_notifications: bool,
+}
+
+/// Every admin can switch their own new-order emails on or off (no password needed, it only affects their inbox).
+async fn admin_update_own_notifications(
+    State(pool): State<PgPool>,
+    Extension(admin): Extension<CurrentAdmin>,
+    Json(payload): Json<OwnNotificationsRequest>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    sqlx::query("UPDATE admin_users SET order_notifications = $1, updated_at = NOW() WHERE id = $2")
+        .bind(payload.order_notifications)
+        .bind(admin.id)
+        .execute(&pool)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(json!({ "order_notifications": payload.order_notifications })))
 }
 
 /// `None` keeps the current address, an empty string removes it; anything else must look like an email.
@@ -1812,6 +1834,9 @@ async fn admin_update_system_settings(
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
     check_settings_permissions(&pool, &admin, &payload).await?;
     check_email_verification_possible(&pool, &payload).await?;
+    if payload.order_notification_roles.as_deref().is_some_and(|r| !crate::services::email::ORDER_NOTIFICATION_ROLES.contains(&r)) {
+        return Err((StatusCode::BAD_REQUEST, "Order emails can go to: off, superadmin, admin or all".to_string()));
+    }
 
     sqlx::query(
         r#"
@@ -1995,6 +2020,14 @@ async fn admin_update_system_settings(
             // Switching sales on/off changes what customers pay: record it in the price history
             let _ = sqlx::query("SELECT record_variant_prices(NULL)").execute(&pool).await;
         }
+    }
+
+    if let Some(roles) = payload.order_notification_roles.as_deref() {
+        sqlx::query("UPDATE store_settings SET order_notification_roles = $1 WHERE id = 1")
+            .bind(roles)
+            .execute(&pool)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     }
 
     // Legal pages show settings (address, features): let the storefront reload them

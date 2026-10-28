@@ -94,6 +94,7 @@
     { value: 'test', label: 'SMTP Connection Test' },
     { value: 'verification', label: 'Account Verification' },
     { value: 'order_created', label: 'Order Confirmation' },
+    { value: 'order_notification', label: 'New Order (to the shop team)' },
     { value: 'payment_received', label: 'Payment Confirmed' },
     { value: 'order_shipped', label: 'Order Shipped & Tracking' },
     { value: 'back_in_stock', label: 'Back in Stock Alert' },

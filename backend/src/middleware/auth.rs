@@ -45,6 +45,8 @@ pub struct CurrentAdmin {
     pub role: String,
     pub is_default: bool,
     pub permissions: BTreeMap<String, bool>,
+    /// Gets the new-order email when the shop's setting includes the role
+    pub order_notifications: bool,
 }
 
 impl CurrentAdmin {
@@ -120,7 +122,7 @@ pub async fn admin_auth_middleware(State(pool): State<PgPool>, mut req: Request<
         .ok_or_else(|| deny(StatusCode::UNAUTHORIZED, "unauthenticated", "Please log in"))?;
 
     let admin_id = Uuid::parse_str(&claims.sub).map_err(|_| deny(StatusCode::UNAUTHORIZED, "unauthenticated", "Please log in again"))?;
-    let row = sqlx::query("SELECT id, username, email, role, is_default, permissions FROM admin_users WHERE id = $1")
+    let row = sqlx::query("SELECT id, username, email, role, is_default, permissions, order_notifications FROM admin_users WHERE id = $1")
         .bind(admin_id)
         .fetch_optional(&pool)
         .await
@@ -135,6 +137,7 @@ pub async fn admin_auth_middleware(State(pool): State<PgPool>, mut req: Request<
         permissions: effective_permissions(&role, &row.get::<JsonValue, _>("permissions")),
         role,
         is_default: row.get("is_default"),
+        order_notifications: row.get("order_notifications"),
     };
 
     // Nested routers see the path without the /api/v1/admin prefix

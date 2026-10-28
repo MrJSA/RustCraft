@@ -319,6 +319,13 @@
   let requireEmailVerification = Boolean(settings.require_email_verification);
 
   // BOM Low Stock Alerts Configuration
+  let orderNotificationRoles = settings.order_notification_roles || 'superadmin';
+  const orderNotificationOptions = [
+    { value: 'superadmin', label: 'Superadmins only', hint: 'Only superadmin accounts.' },
+    { value: 'admin', label: 'Admins & superadmins', hint: 'Every account except editors.' },
+    { value: 'all', label: 'Everyone', hint: 'Superadmins, admins and editors.' },
+    { value: 'off', label: 'Nobody', hint: 'No order emails to the team.' }
+  ];
   let lowStockAlertsEnabled = settings.low_stock_alerts_enabled ?? true;
   let lowStockAlertRecipientsMode = settings.low_stock_alert_recipients_mode || 'stock_managers';
   let lowStockAlertCustomEmails = settings.low_stock_alert_custom_emails || '';
@@ -419,7 +426,8 @@
           low_stock_alerts_enabled: lowStockAlertsEnabled,
           low_stock_alert_recipients_mode: lowStockAlertRecipientsMode,
           low_stock_alert_custom_emails: lowStockAlertCustomEmails,
-          low_stock_alert_selected_user_ids: lowStockAlertSelectedUserIds
+          low_stock_alert_selected_user_ids: lowStockAlertSelectedUserIds,
+          order_notification_roles: orderNotificationRoles
         })
       });
 
@@ -442,6 +450,7 @@
     { value: 'test', label: 'SMTP Connection Test' },
     { value: 'verification', label: 'Account Verification' },
     { value: 'order_created', label: 'Order Confirmation' },
+    { value: 'order_notification', label: 'New Order (to the shop team)' },
     { value: 'payment_received', label: 'Payment Confirmed' },
     { value: 'order_shipped', label: 'Order Shipped & Tracking' },
     { value: 'back_in_stock', label: 'Back in Stock Alert' },
@@ -1201,6 +1210,33 @@
               </div>
               <input type="checkbox" bind:checked={requireEmailVerification} class="accent-orange-500 w-4 h-4 ml-3" />
             </div>
+          </div>
+        </div>
+
+        <!-- New-order emails to the shop team -->
+        <div class="p-6 rounded-3xl bg-slate-900 border border-slate-800 shadow-xl space-y-5">
+          <div class="flex items-center gap-2.5 pb-3 border-b border-slate-800 text-white font-bold text-sm uppercase tracking-wider">
+            <Bell size={18} class="text-orange-400" />
+            <span>New-Order Emails to the Team</span>
+          </div>
+          <p class="text-xs text-slate-400 leading-relaxed">
+            Sends an email with the items and total to admin accounts as soon as an order is placed. Accounts need an email address,
+            and everyone can switch these emails off for themselves under their account (top of the admin).
+          </p>
+          <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            {#each orderNotificationOptions as opt}
+              <button
+                type="button"
+                on:click={() => orderNotificationRoles = opt.value}
+                class="p-3.5 rounded-xl text-left border transition-all text-xs {orderNotificationRoles === opt.value ? 'bg-orange-500/10 border-orange-500/40 text-orange-300 ring-1 ring-orange-500/30' : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white hover:bg-slate-850'}"
+              >
+                <div class="font-bold flex items-center justify-between">
+                  <span>{opt.label}</span>
+                  {#if orderNotificationRoles === opt.value}<Check size={14} />{/if}
+                </div>
+                <p class="text-[11px] mt-1 opacity-80">{opt.hint}</p>
+              </button>
+            {/each}
           </div>
         </div>
 

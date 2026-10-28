@@ -62,6 +62,7 @@ Database migrations run automatically when the backend starts.
 ### Emails
 - Sent through any SMTP server.
 - Order confirmation, payment received, shipment, back-in-stock, account verification, password reset and low-stock alerts.
+- New-order emails to the team: choose superadmins only, admins and superadmins, or everyone incl. editors. Each admin can switch them off for themselves under their account.
 - All emails share one branded layout. You can send a test of each template from the admin.
 
 ### German / EU law

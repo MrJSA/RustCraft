@@ -908,6 +908,77 @@ pub async fn send_withdrawal_notification_email(settings: &StoreSettings, to_ema
     send_email_raw(settings, to_email, &subject, &html).await
 }
 
+/// Values of `store_settings.order_notification_roles`.
+pub const ORDER_NOTIFICATION_ROLES: [&str; 4] = ["off", "superadmin", "admin", "all"];
+
+/// Whether staff with `role` get the new-order email under the shop's setting.
+pub fn role_gets_order_emails(setting: &str, role: &str) -> bool {
+    match setting {
+        "off" => false,
+        "all" => true,
+        "admin" => matches!(role, "superadmin" | "admin"),
+        _ => role == "superadmin",
+    }
+}
+
+/// Tells the shop team about a new order (the customer gets `send_order_created_email`).
+pub async fn send_new_order_staff_email(settings: &StoreSettings, to_email: &str, order: &Order, summary: &OrderSummary) -> Result<(), String> {
+    let inv = &summary.invoice;
+    let test = if order.is_test { "[Test] " } else { "" };
+    let total = money(inv.payable_cents, &inv.currency_symbol);
+    let subject = format!("{}New order {} ({}) - {}", test, inv.order_number, total, settings.store_name);
+    let payment = match order.payment_status.as_str() {
+        "paid" => "Paid",
+        "pending" => "Payment pending",
+        other => other,
+    };
+    let mut rows = vec![
+        ("Customer", html_escape(&order.customer_name)),
+        ("Email", html_escape(&order.customer_email)),
+        ("Payment", format!("{} ({})", html_escape(payment), html_escape(&inv.payment_label))),
+    ];
+    if order.is_test {
+        rows.push(("Mode", "Test payment, not a real sale".to_string()));
+    }
+    let admin_url = format!("{}/orders", admin_public_url());
+    let content = format!(
+        "{}{}{}{}{}",
+        paragraph(&format!("A new order <strong>{}</strong> over <strong>{}</strong> has arrived.", html_escape(&inv.order_number), total)),
+        details_box(&rows),
+        summary.html(),
+        button(&admin_url, "Open orders", C_ACCENT),
+        small("You receive this email because order notifications are on for your role. You can switch them off for your account in the admin: click your account at the top.")
+    );
+    let html = render_email_layout(settings, &format!("New order {} over {}.", inv.order_number, total), "New order", C_ACCENT, &content);
+    send_email_raw(settings, to_email, &subject, &html).await
+}
+
+/// Emails every admin whose role gets order notifications and who has not switched them off.
+async fn notify_staff_of_new_order(pool: &sqlx::PgPool, settings: &StoreSettings, order: &Order, summary: &OrderSummary) {
+    if settings.order_notification_roles == "off" || !settings.smtp_enabled {
+        return;
+    }
+    let staff: Vec<(String, String)> = sqlx::query_as(
+        "SELECT email, role FROM admin_users WHERE order_notifications = TRUE AND email IS NOT NULL AND TRIM(email) <> ''",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_else(|e| {
+        error!("Cannot load admins for the new-order email {}: {}", order.order_number, e);
+        Vec::new()
+    });
+    let recipients: BTreeSet<String> = staff
+        .into_iter()
+        .filter(|(_, role)| role_gets_order_emails(&settings.order_notification_roles, role))
+        .map(|(email, _)| email.trim().to_lowercase())
+        .collect();
+    for email in recipients {
+        if let Err(e) = send_new_order_staff_email(settings, &email, order, summary).await {
+            error!("New-order email for {} to {} not sent: {}", order.order_number, email, e);
+        }
+    }
+}
+
 // ------------------------------------------------------------------ invoices for emails
 
 /// The invoice PDF (a ZUGFeRD / Factur-X e-invoice when enabled) for the payment confirmation.
@@ -993,6 +1064,10 @@ pub async fn send_test_email_by_type(
         "order_created" => {
             let (order, items) = sample_order(settings);
             send_order_created_email(settings, to_email, &OrderSummary::new(&order, &items, settings)).await
+        }
+        "order_notification" => {
+            let (order, items) = sample_order(settings);
+            send_new_order_staff_email(settings, to_email, &order, &OrderSummary::new(&order, &items, settings)).await
         }
         "payment_received" => {
             let (order, items) = sample_order(settings);
@@ -1094,6 +1169,7 @@ pub async fn send_order_created_notification(pool: &sqlx::PgPool, order_number: 
     if let Err(e) = send_order_created_email(&settings, &order.customer_email, &summary).await {
         error!("Order confirmation for {} not sent: {}", order_number, e);
     }
+    notify_staff_of_new_order(pool, &settings, &order, &summary).await;
 }
 
 pub async fn send_payment_received_notification(pool: &sqlx::PgPool, order_number: &str) {
@@ -1336,6 +1412,16 @@ mod tests {
         assert!(html.contains("Pro Mechanical Keyboard"));
         assert!(html.contains("79,60 €"));
         assert!(html.contains("incl."));
+    }
+
+    #[test]
+    fn order_emails_follow_the_role_setting() {
+        assert!(role_gets_order_emails("superadmin", "superadmin"));
+        assert!(!role_gets_order_emails("superadmin", "admin"));
+        assert!(role_gets_order_emails("admin", "admin") && !role_gets_order_emails("admin", "editor"));
+        assert!(role_gets_order_emails("all", "editor"));
+        assert!(!role_gets_order_emails("off", "superadmin"));
+        assert!(ORDER_NOTIFICATION_ROLES.iter().all(|r| *r == "off" || role_gets_order_emails(r, "superadmin")));
     }
 }
 
