@@ -31,6 +31,8 @@ pub const MIGRATIONS: &[(&str, &str)] = &[
     ("0024_invoice_pdf_and_einvoicing", include_str!("../migrations/0024_invoice_pdf_and_einvoicing.sql")),
     ("0025_reviews_newsletter_sales_downloads_b2b_legal", include_str!("../migrations/0025_reviews_newsletter_sales_downloads_b2b_legal.sql")),
     ("0026_package_sizes", include_str!("../migrations/0026_package_sizes.sql")),
+    ("0027_order_notifications", include_str!("../migrations/0027_order_notifications.sql")),
+    ("0028_withdrawal_texts_used_and_digital_goods", include_str!("../migrations/0028_withdrawal_texts_used_and_digital_goods.sql")),
 ];
 
 pub async fn init_db(database_url: &str) -> Result<PgPool, sqlx::Error> {

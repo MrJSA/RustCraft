@@ -111,6 +111,10 @@ pub struct StoreSettings {
     #[serde(default)]
     #[sqlx(default)]
     pub gpsr_default_manufacturer: String,
+    /// Which staff roles get an email for every new order: off, superadmin, admin (incl. superadmin) or all
+    #[serde(default = "default_order_notification_roles")]
+    #[sqlx(default)]
+    pub order_notification_roles: String,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -119,6 +123,9 @@ fn default_true() -> bool {
 }
 fn default_download_limit() -> i32 {
     10
+}
+fn default_order_notification_roles() -> String {
+    "superadmin".to_string()
 }
 fn default_stock_managers() -> String {
     "stock_managers".to_string()
@@ -252,6 +259,7 @@ pub struct UpdateStoreSettingsRequest {
     pub download_days: Option<i32>,
     pub default_delivery_time: Option<String>,
     pub gpsr_default_manufacturer: Option<String>,
+    pub order_notification_roles: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

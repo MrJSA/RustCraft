@@ -7,7 +7,7 @@
     LayoutDashboard, Package, Warehouse, ShoppingCart, 
     CreditCard, Truck, Sliders, ExternalLink, ShieldCheck, Zap,
     FileText, Menu, FolderTree, Image, Mail, AlertTriangle, KeyRound,
-    LogOut, User, X, CheckCircle2, TrendingUp, ChevronDown, ChevronRight
+    LogOut, User, X, CheckCircle2, TrendingUp, ChevronDown, ChevronRight, Bell
   } from 'lucide-svelte';
 
   export let data;
@@ -96,6 +96,14 @@
   let changePasswordError = '';
   let changePasswordSuccess = '';
   let isSubmittingChange = false;
+  let orderNotifications = true;
+  let isSavingNotifications = false;
+
+  // Same rule as the backend (services::email::role_gets_order_emails)
+  $: orderEmailSetting = settings.order_notification_roles || 'superadmin';
+  $: roleGetsOrderEmails = orderEmailSetting === 'all'
+    || (orderEmailSetting === 'admin' && ['superadmin', 'admin'].includes(data.admin?.role))
+    || (orderEmailSetting === 'superadmin' && data.admin?.role === 'superadmin');
 
   // Collapsible Submenu State
   let expandedGroups = {};
@@ -126,6 +134,7 @@
       adminUsername = data.admin.username;
       newUsername = data.admin.username;
     }
+    if (data.admin.order_notifications !== undefined) orderNotifications = Boolean(data.admin.order_notifications);
     if (data.admin.email !== undefined) {
       adminEmail = data.admin.email || '';
       newEmail = data.admin.email || '';
@@ -155,6 +164,26 @@
     changePasswordError = '';
     changePasswordSuccess = '';
     isChangePasswordModalOpen = true;
+  }
+
+  // Saved right away: it only affects this admin's own inbox, so no password is needed
+  async function toggleOrderNotifications() {
+    const next = !orderNotifications;
+    isSavingNotifications = true;
+    changePasswordError = '';
+    try {
+      const res = await fetch('/api/v1/admin/auth/notifications', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ order_notifications: next })
+      });
+      if (!res.ok) throw new Error((await res.text().catch(() => '')) || 'Could not save the notification setting.');
+      orderNotifications = next;
+    } catch (e) {
+      changePasswordError = e.message || 'Could not save the notification setting.';
+    } finally {
+      isSavingNotifications = false;
+    }
   }
 
   async function handleChangeCredentials() {
@@ -419,6 +448,37 @@
         {#if changePasswordError}
           <div class="p-3 rounded-xl bg-rose-500/20 text-rose-400 border border-rose-500/30 text-xs font-semibold">
             {changePasswordError}
+          </div>
+        {/if}
+
+        {#if !isDefaultCredentials}
+          <div class="p-3 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between gap-3 text-xs">
+            <div class="flex items-start gap-2">
+              <Bell size={16} class="text-orange-500 mt-0.5 shrink-0" />
+              <div>
+                <span class="block text-slate-300 font-semibold">Email me about new orders</span>
+                <p class="text-[10px] text-slate-500 mt-0.5">
+                  {#if !adminEmail}
+                    Add an email address below to receive them.
+                  {:else if !roleGetsOrderEmails}
+                    Your role currently gets no order emails (Settings → Email & Auth Policies).
+                  {:else}
+                    Sent to {adminEmail}. Saved immediately.
+                  {/if}
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={orderNotifications}
+              aria-label="Email me about new orders"
+              on:click={toggleOrderNotifications}
+              disabled={isSavingNotifications}
+              class="relative w-11 h-6 shrink-0 rounded-full transition-colors disabled:opacity-50 {orderNotifications ? 'bg-orange-600' : 'bg-slate-800'}"
+            >
+              <span class="absolute top-[2px] left-[2px] w-5 h-5 rounded-full bg-white transition-transform {orderNotifications ? 'translate-x-5' : ''}"></span>
+            </button>
           </div>
         {/if}
 
