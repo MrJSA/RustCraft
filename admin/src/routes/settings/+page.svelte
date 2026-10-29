@@ -35,6 +35,7 @@
     Box,
     Bell,
     Users,
+    FileText,
     X
   } from 'lucide-svelte';
   import ShippingManager from '$lib/components/ShippingManager.svelte';
@@ -318,6 +319,11 @@
   let requireRegisteredCheckout = Boolean(settings.require_registered_checkout);
   let requireEmailVerification = Boolean(settings.require_email_verification);
 
+  // Invoices sent with the payment confirmation
+  let emailInvoicePdf = settings.email_invoice_pdf ?? true;
+  let einvoiceEnabled = Boolean(settings.einvoice_enabled);
+  $: hasTaxId = Boolean(vatId.trim() || taxNumber.trim());
+
   // BOM Low Stock Alerts Configuration
   let orderNotificationRoles = settings.order_notification_roles || 'superadmin';
   const orderNotificationOptions = [
@@ -423,6 +429,8 @@
           smtp_enabled: smtpEnabled,
           require_registered_checkout: requireRegisteredCheckout,
           require_email_verification: requireEmailVerification,
+          email_invoice_pdf: emailInvoicePdf,
+          einvoice_enabled: einvoiceEnabled,
           low_stock_alerts_enabled: lowStockAlertsEnabled,
           low_stock_alert_recipients_mode: lowStockAlertRecipientsMode,
           low_stock_alert_custom_emails: lowStockAlertCustomEmails,
@@ -1211,6 +1219,37 @@
               <input type="checkbox" bind:checked={requireEmailVerification} class="accent-orange-500 w-4 h-4 ml-3" />
             </div>
           </div>
+        </div>
+
+        <!-- Invoices attached to payment confirmations -->
+        <div class="p-6 rounded-3xl bg-slate-900 border border-slate-800 shadow-xl space-y-4">
+          <h3 class="text-sm font-bold text-white flex items-center gap-2 border-b border-slate-800 pb-3">
+            <FileText size={18} class="text-orange-400" />
+            <span>Invoices</span>
+          </h3>
+
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
+            <div class="p-4 rounded-2xl bg-slate-950 border border-slate-800 flex items-center justify-between">
+              <div>
+                <span class="font-bold text-white block">Attach the Invoice PDF to the Payment Confirmation</span>
+                <p class="text-[11px] text-slate-400 mt-0.5">Customers receive their invoice automatically as soon as the payment is confirmed. Every invoice can also be opened in the order details.</p>
+              </div>
+              <input type="checkbox" bind:checked={emailInvoicePdf} class="accent-orange-500 w-4 h-4 ml-3" />
+            </div>
+
+            <div class="p-4 rounded-2xl bg-slate-950 border border-slate-800 flex items-center justify-between">
+              <div>
+                <span class="font-bold text-white block">E-Invoice: ZUGFeRD / Factur-X (EN 16931)</span>
+                <p class="text-[11px] text-slate-400 mt-0.5">The invoice PDF additionally contains the invoice as structured XML. People see a normal PDF, accounting software imports it automatically. Recommended for B2B (e-invoicing in Germany since 2025).</p>
+              </div>
+              <input type="checkbox" bind:checked={einvoiceEnabled} class="accent-orange-500 w-4 h-4 ml-3" />
+            </div>
+          </div>
+          {#if einvoiceEnabled && !hasTaxId}
+            <div class="p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-300 text-xs">
+              E-invoices need your VAT ID or tax number (Steuernummer). Enter one under Store Identity & Legal and save it first.
+            </div>
+          {/if}
         </div>
 
         <!-- New-order emails to the shop team -->

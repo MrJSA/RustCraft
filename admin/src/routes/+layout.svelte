@@ -73,7 +73,7 @@
       subItems: [
         { href: '/settings?tab=identity', label: 'Store Identity & Legal', tab: 'identity', match: (p, t) => (p === '/settings' && (!t || t === 'identity')) },
         { href: '/settings?tab=payments', label: 'Payment Providers', tab: 'payments', match: (p, t) => p === '/settings/payments' || (p === '/settings' && t === 'payments') },
-        { href: '/settings?tab=email', label: 'Email & Auth Policies', tab: 'email', match: (p, t) => p === '/settings/email' || (p === '/settings' && t === 'email') },
+        { href: '/settings?tab=email', label: 'Email & Auth Policies', tab: 'email', match: (p, t) => p === '/settings' && t === 'email' },
         { href: '/settings?tab=shipping', label: 'Shipping & Delivery', tab: 'shipping', match: (p, t) => p === '/settings/shipping' || (p === '/settings' && t === 'shipping') },
         { href: '/settings?tab=media', label: 'Media Library', tab: 'media', match: (p, t) => p === '/settings/media' || (p === '/settings' && t === 'media') },
         { href: '/settings?tab=users', label: 'Admin Users & Access', tab: 'users', match: (p, t) => (p === '/settings' && t === 'users') },
