@@ -167,8 +167,9 @@ fn extract_dump(zip_path: &Path, work: &Path) -> Result<PathBuf, String> {
         let mut entry = archive
             .by_name("database.sql")
             .map_err(|_| "This ZIP file is not a shop backup (database.sql is missing).".to_string())?;
-        let mut out = std::fs::File::create(&target).map_err(|e| e.to_string())?;
-        std::io::copy(&mut entry, &mut out).map_err(|e| format!("The backup file is damaged: {}", e))?;
+        let out = std::fs::File::create(&target).map_err(|e| e.to_string())?;
+        strip_restrict_lines(std::io::BufReader::new(&mut entry), std::io::BufWriter::new(out))
+            .map_err(|e| format!("The backup file is damaged: {}", e))?;
     }
 
     let unknown = unknown_migrations(&target)?;
@@ -179,6 +180,34 @@ fn extract_dump(zip_path: &Path, work: &Path) -> Result<PathBuf, String> {
         ));
     }
     Ok(target)
+}
+
+/// Copies the dump without its own `\restrict KEY` / `\unrestrict KEY` lines (written by pg_dump ≥ 16.10).
+/// `load_dump` puts psql into restricted mode with a key of its own; a dump that tries any psql
+/// meta-command (`\!` shell commands, `\o` file writes, `\unrestrict` …) then fails instead of running it.
+/// Lines inside `COPY … FROM stdin` data blocks are copied unchanged.
+fn strip_restrict_lines(mut input: impl BufRead, mut output: impl std::io::Write) -> std::io::Result<()> {
+    let mut line = Vec::new();
+    let mut in_copy = false;
+    loop {
+        line.clear();
+        if input.read_until(b'\n', &mut line)? == 0 {
+            break;
+        }
+        let text = line.strip_suffix(b"\n").unwrap_or(&line);
+        let text = text.strip_suffix(b"\r").unwrap_or(text);
+        if in_copy {
+            if text == b"\\." {
+                in_copy = false;
+            }
+        } else if text.starts_with(b"COPY ") && text.ends_with(b"FROM stdin;") {
+            in_copy = true;
+        } else if text.starts_with(b"\\restrict ") || text.starts_with(b"\\unrestrict ") {
+            continue;
+        }
+        output.write_all(&line)?;
+    }
+    output.flush()
 }
 
 /// Schema migrations recorded in the dump that this shop version does not know.
@@ -209,8 +238,12 @@ fn unknown_migrations(dump: &Path) -> Result<Vec<String>, String> {
 /// (and their links to the restored tables) cannot block it; the migrations recreate them after the restart.
 async fn load_dump(dump: &Path) -> Result<(), String> {
     let database_url = std::env::var("DATABASE_URL").map_err(|_| "DATABASE_URL is not set.".to_string())?;
+    // Restricted mode (psql ≥ 16.10): only SQL runs from here on, psql meta-commands in the dump are refused.
+    // The key is random, so a crafted dump cannot `\unrestrict` itself.
+    let restrict = format!("\\restrict {}", crate::services::auth::random_token(16));
     let output = tokio::process::Command::new("psql")
         .args(["--no-psqlrc", "--quiet", "--set", "ON_ERROR_STOP=1", "--single-transaction"])
+        .args(["--command", &restrict])
         .args(["--command", "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"])
         .arg("--file")
         .arg(dump)
@@ -333,5 +366,14 @@ mod tests {
         assert_eq!(extract_uploads(&zip, &target).unwrap(), 2);
         assert_eq!(std::fs::read(target.join("sub/manual.pdf")).unwrap(), b"pdf");
         assert!(!dir.0.join("escape.txt").exists());
+    }
+
+    #[test]
+    fn dump_restrict_lines_are_removed_but_copy_data_is_kept() {
+        let dump = b"\\restrict abc123\nSET x = 1;\nCOPY public.t (a) FROM stdin;\n\\restrict data\n\\.\n\\! id\n\\unrestrict abc123\n";
+        let mut out = Vec::new();
+        strip_restrict_lines(&dump[..], &mut out).unwrap();
+        // The meta-command `\! id` stays in and makes the restricted psql fail; COPY data is untouched
+        assert_eq!(out, b"SET x = 1;\nCOPY public.t (a) FROM stdin;\n\\restrict data\n\\.\n\\! id\n".to_vec());
     }
 }

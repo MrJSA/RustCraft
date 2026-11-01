@@ -9,7 +9,8 @@ RUN touch src/main.rs && cargo build --release
 
 # Docker CLI (incl. compose plugin) + git to update the checkout and rebuild the shop
 FROM docker:27-cli
-RUN apk add --no-cache git
+# ssh-keygen verifies the signatures of release tags
+RUN apk add --no-cache git openssh-keygen
 COPY --from=builder /usr/src/updater/target/release/updater /usr/local/bin/updater
 ENV REPO_DIR=/repo SECRETS_DIR=/secrets RUST_LOG=info
 CMD ["updater"]

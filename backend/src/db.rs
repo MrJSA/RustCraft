@@ -35,6 +35,17 @@ pub const MIGRATIONS: &[(&str, &str)] = &[
     ("0028_withdrawal_texts_used_and_digital_goods", include_str!("../migrations/0028_withdrawal_texts_used_and_digital_goods.sql")),
 ];
 
+/// Passwords published in this repository (compose fallback and `.env.example`).
+const PUBLISHED_DB_PASSWORDS: &[&str] = &["local_dev_password", "change-me-to-a-long-random-password"];
+
+/// True when the password in a `postgres://user:password@host/db` URL is a published default or shorter than 16 characters.
+pub fn weak_database_password(database_url: &str) -> bool {
+    let Some((_, rest)) = database_url.split_once("://") else { return false };
+    let Some((credentials, _)) = rest.rsplit_once('@') else { return true };
+    let password = credentials.split_once(':').map(|(_, p)| p).unwrap_or("");
+    password.len() < 16 || PUBLISHED_DB_PASSWORDS.contains(&password)
+}
+
 pub async fn init_db(database_url: &str) -> Result<PgPool, sqlx::Error> {
     info!("Connecting to PostgreSQL database...");
 
@@ -81,23 +92,40 @@ pub async fn init_db(database_url: &str) -> Result<PgPool, sqlx::Error> {
         }
     }
 
-    // Apply any unapplied migrations in order
+    // Apply any unapplied migrations in order.
+    // Each migration runs in its own transaction together with its `_schema_migrations` record: a failing
+    // migration leaves the database exactly as it was (no half-applied schema), and a failed lookup aborts
+    // the start instead of re-running a migration that was already applied.
     for (version, sql) in migration_files {
         let is_applied: bool = sqlx::query_scalar(
             "SELECT EXISTS (SELECT 1 FROM _schema_migrations WHERE version = $1)"
         )
         .bind(version)
         .fetch_one(&pool)
-        .await
-        .unwrap_or(false);
+        .await?;
 
         if !is_applied {
             info!("Applying migration {}...", version);
-            sqlx::raw_sql(sql).execute(&pool).await?;
+            let mut tx = pool.begin().await?;
+            // Only one backend may migrate at a time (e.g. an old and a new container during an update)
+            sqlx::query("SELECT pg_advisory_xact_lock(72_270_001)").execute(&mut *tx).await?;
+            let raced: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM _schema_migrations WHERE version = $1)")
+                .bind(version)
+                .fetch_one(&mut *tx)
+                .await?;
+            if raced {
+                tx.rollback().await?;
+                continue;
+            }
+            if let Err(e) = sqlx::raw_sql(sql).execute(&mut *tx).await {
+                tracing::error!("Migration {} failed and was rolled back, the database is unchanged: {}", version, e);
+                return Err(e);
+            }
             sqlx::query("INSERT INTO _schema_migrations (version) VALUES ($1)")
                 .bind(version)
-                .execute(&pool)
+                .execute(&mut *tx)
                 .await?;
+            tx.commit().await?;
             info!("Migration {} applied successfully!", version);
         } else {
             tracing::debug!("Migration {} already applied, skipping.", version);
@@ -162,4 +190,18 @@ pub async fn init_db(database_url: &str) -> Result<PgPool, sqlx::Error> {
     info!("Schema migrations check complete!");
 
     Ok(pool)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detects_weak_database_passwords() {
+        assert!(weak_database_password("postgres://shop_user:local_dev_password@db:5432/shop_db"));
+        assert!(weak_database_password("postgres://shop_user:change-me-to-a-long-random-password@db:5432/shop_db"));
+        assert!(weak_database_password("postgres://shop_user:short@db:5432/shop_db"));
+        assert!(weak_database_password("postgres://shop_user@db:5432/shop_db"));
+        assert!(!weak_database_password("postgres://shop_user:3f9a1c0e8b7d6a5f4e3d2c1b0a9f8e7d6c5b4a39@db:5432/shop_db"));
+    }
 }

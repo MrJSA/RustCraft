@@ -36,10 +36,17 @@ WORKDIR /app
 
 COPY --from=builder /usr/src/backend/target/release/backend /app/backend
 COPY --from=builder /usr/src/backend/migrations /app/migrations
+COPY entrypoint.sh /app/entrypoint.sh
+
+# Unprivileged account the backend runs as (entrypoint.sh drops root after fixing the uploads volume)
+RUN groupadd --system --gid 10001 shop \
+    && useradd --system --uid 10001 --gid shop --home-dir /app --shell /usr/sbin/nologin shop \
+    && mkdir -p /app/uploads && chown shop:shop /app/uploads \
+    && chmod 0755 /app/entrypoint.sh
 
 ENV PORT=8000
 ENV RUST_LOG=info
 
 EXPOSE 8000
 
-CMD ["/app/backend"]
+ENTRYPOINT ["/app/entrypoint.sh"]

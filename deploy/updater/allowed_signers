@@ -1,0 +1,6 @@
+# SSH public keys that may sign release tags (git "allowed signers" format, one key per line):
+#   releases namespaces="git" ssh-ed25519 AAAA...
+#
+# The updater reads this file from the version that is currently installed. As soon as it contains a key,
+# a release is only installed when its tag (vX.Y.Z) was signed with one of these keys (git tag -s).
+# Without keys, unsigned releases are installed with a warning (set UPDATE_REQUIRE_SIGNED=true in .env to refuse them).

@@ -21,6 +21,16 @@ use tracing::{error, info};
 /// Services rebuilt on update. The updater never restarts itself mid-job.
 const APP_SERVICES: &[&str] = &["backend", "storefront", "admin"];
 
+/// SSH public keys allowed to sign release tags (git `allowed_signers` format). Always read from the
+/// *installed* commit, so a new release can only be installed when a key the current version trusts signed it.
+const ALLOWED_SIGNERS_PATH: &str = "deploy/updater/allowed_signers";
+
+/// Pre-update database dumps kept in `backups/` (older ones are deleted).
+const KEEP_PRE_UPDATE_BACKUPS: usize = 10;
+
+/// How long the updated backend may take to become healthy (migrations included) before rolling back.
+const HEALTH_TIMEOUT_SECS: u64 = 300;
+
 #[derive(Default, Clone, Serialize)]
 struct Job {
     kind: String,
@@ -211,6 +221,87 @@ async fn current_channel(repo: &Path) -> Channel {
     Channel::parse(&read_env_value(&env, "UPDATE_CHANNEL")).unwrap_or(Channel::Stable)
 }
 
+/// Non-comment lines of an `allowed_signers` file.
+fn signer_lines(content: &str) -> Vec<&str> {
+    content.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')).collect()
+}
+
+fn env_flag(content: &str, key: &str) -> bool {
+    matches!(read_env_value(content, key).to_lowercase().as_str(), "1" | "true" | "yes" | "on")
+}
+
+/// Refuses a release tag that is not signed by a key the installed version trusts.
+/// Without trusted keys the tag is accepted with a warning, unless `UPDATE_REQUIRE_SIGNED=true` in `.env`.
+async fn verify_release_tag(state: &Shared, tag: &str) -> Result<(), String> {
+    let signers = run(&state.repo, "git", &["show", &format!("HEAD:{}", ALLOWED_SIGNERS_PATH)]).await.unwrap_or_default();
+    let signers = signer_lines(&signers);
+    if signers.is_empty() {
+        let env = tokio::fs::read_to_string(state.repo.join(".env")).await.unwrap_or_default();
+        if env_flag(&env, "UPDATE_REQUIRE_SIGNED") {
+            return Err(format!(
+                "UPDATE_REQUIRE_SIGNED is on, but the installed version has no trusted signing keys ({}). Nothing was changed.",
+                ALLOWED_SIGNERS_PATH
+            ));
+        }
+        log(state, format!("   WARNING: {} is not signature-checked (no trusted keys in {})", tag, ALLOWED_SIGNERS_PATH)).await;
+        return Ok(());
+    }
+    let file = std::env::temp_dir().join(format!("allowed_signers-{}", uuid::Uuid::new_v4().simple()));
+    tokio::fs::write(&file, format!("{}\n", signers.join("\n"))).await.map_err(|e| e.to_string())?;
+    let signers_cfg = format!("gpg.ssh.allowedSignersFile={}", file.display());
+    let result = step(state, &format!("Verifying the signature of {}", tag), "git", &["-c", "gpg.format=ssh", "-c", &signers_cfg, "verify-tag", tag]).await;
+    let _ = tokio::fs::remove_file(&file).await;
+    result.map(|_| ()).map_err(|_| format!("{} is not signed by a trusted key — refusing to install it. Nothing was changed.", tag))
+}
+
+/// Waits until the backend answers `/health` (database reachable, migrations done).
+async fn wait_for_backend(state: &Shared) -> bool {
+    log(state, "→ Waiting for the shop to come back up").await;
+    let started = std::time::Instant::now();
+    while started.elapsed().as_secs() < HEALTH_TIMEOUT_SECS {
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        let probe = compose_args(&["exec", "-T", "backend", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:8000/health"]);
+        if run(&state.repo, "docker", &probe).await.is_ok() {
+            log(state, format!("   backend healthy after {} s", started.elapsed().as_secs())).await;
+            return true;
+        }
+    }
+    false
+}
+
+/// Writes the dump readable by its owner only and removes the oldest pre-update dumps.
+async fn store_backup(dir: &Path, file: &Path, data: &[u8]) -> Result<(), String> {
+    tokio::fs::create_dir_all(dir).await.map_err(|e| e.to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = tokio::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).await;
+    }
+    let mut options = tokio::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut out = options.open(file).await.map_err(|e| format!("could not write backup: {}", e))?;
+    tokio::io::AsyncWriteExt::write_all(&mut out, data).await.map_err(|e| format!("could not write backup: {}", e))?;
+
+    let mut dumps = Vec::new();
+    if let Ok(mut entries) = tokio::fs::read_dir(dir).await {
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with("pre-update-") && name.ends_with(".sql") {
+                let modified = entry.metadata().await.and_then(|m| m.modified()).ok();
+                dumps.push((modified, entry.path()));
+            }
+        }
+    }
+    dumps.sort();
+    let excess = dumps.len().saturating_sub(KEEP_PRE_UPDATE_BACKUPS);
+    for (_, path) in dumps.into_iter().take(excess) {
+        let _ = tokio::fs::remove_file(path).await;
+    }
+    Ok(())
+}
+
 async fn current_version(repo: &Path) -> Option<Version> {
     tokio::fs::read_to_string(repo.join("VERSION")).await.ok().and_then(|v| Version::parse(&v))
 }
@@ -320,10 +411,12 @@ async fn perform_update(state: &Shared) -> Result<(), String> {
         return Err(format!("The installation has local code changes, refusing to overwrite them:\n{}", dirty.trim()));
     }
     let previous = run(&state.repo, "git", &["rev-parse", "HEAD"]).await?.trim().to_string();
+    let tag = format!("v{}", target);
+    verify_release_tag(state, &tag).await?;
 
     // Database backup before anything changes
-    tokio::fs::create_dir_all(state.repo.join("backups")).await.map_err(|e| e.to_string())?;
-    let backup = state.repo.join(format!("backups/pre-update-{}-{}.sql", current, chrono::Utc::now().format("%Y%m%d-%H%M%S")));
+    let backup_dir = state.repo.join("backups");
+    let backup = backup_dir.join(format!("pre-update-{}-{}.sql", current, chrono::Utc::now().format("%Y%m%d-%H%M%S")));
     log(state, "→ Backing up the database").await;
     let dump = Command::new("docker")
         .args(compose_args(&["exec", "-T", "db", "pg_dump", "-U", "shop_user", "shop_db"]))
@@ -331,13 +424,12 @@ async fn perform_update(state: &Shared) -> Result<(), String> {
         .output()
         .await
         .map_err(|e| format!("backup failed: {}", e))?;
-    if !dump.status.success() {
+    if !dump.status.success() || dump.stdout.is_empty() {
         return Err(format!("Database backup failed: {}", String::from_utf8_lossy(&dump.stderr)));
     }
-    tokio::fs::write(&backup, &dump.stdout).await.map_err(|e| format!("could not write backup: {}", e))?;
+    store_backup(&backup_dir, &backup, &dump.stdout).await?;
     log(state, format!("   saved {}", backup.display())).await;
 
-    let tag = format!("v{}", target);
     if let Err(e) = step(state, &format!("Switching code to {}", tag), "git", &["-c", "advice.detachedHead=false", "checkout", "--force", &tag]).await {
         return Err(format!("could not check out {}: {}", tag, e));
     }
@@ -349,7 +441,21 @@ async fn perform_update(state: &Shared) -> Result<(), String> {
         let _ = step(state, "Rolling back", "git", &["-c", "advice.detachedHead=false", "checkout", "--force", &previous]).await;
         return Err(e);
     }
-    log(state, format!("Shop updated to {}. Database migrations run automatically on start.", target)).await;
+    if !wait_for_backend(state).await {
+        // Each migration is transactional, so a failed one left the database unchanged; the previous code runs on it again.
+        log(state, format!("The new version did not become healthy within {} s — going back to {}", HEALTH_TIMEOUT_SECS, current)).await;
+        step(state, "Restoring the previous code", "git", &["-c", "advice.detachedHead=false", "checkout", "--force", &previous]).await?;
+        step(state, "Rebuilding the previous version", "docker", &compose_args(&args)).await?;
+        let healthy = wait_for_backend(state).await;
+        return Err(format!(
+            "Update to {} failed and was rolled back to {}{}. The database backup from before the update is {}.",
+            target,
+            current,
+            if healthy { "" } else { " (the shop is still not healthy — check `docker compose logs backend`)" },
+            backup.display()
+        ));
+    }
+    log(state, format!("Shop updated to {}. Database migrations ran automatically on start.", target)).await;
     Ok(())
 }
 
@@ -530,6 +636,39 @@ mod tests {
         let out = upsert_env("# c\nDB_PASSWORD=x\nSHOP_DOMAIN=old\n", &[("SHOP_DOMAIN", "new.example".into()), ("ADMIN_DOMAIN", "a.example".into())]);
         assert_eq!(out, "# c\nDB_PASSWORD=x\nSHOP_DOMAIN=new.example\nADMIN_DOMAIN=a.example\n");
         assert_eq!(read_env_value(&out, "SHOP_DOMAIN"), "new.example");
+    }
+
+    #[test]
+    fn reads_trusted_signers_and_flags() {
+        let file = "# trusted release keys\n\nreleases@example.com namespaces=\"git\" ssh-ed25519 AAAAC3Nza\n  # old key\n";
+        assert_eq!(signer_lines(file), vec!["releases@example.com namespaces=\"git\" ssh-ed25519 AAAAC3Nza"]);
+        assert!(signer_lines("# only comments\n\n").is_empty());
+        assert!(env_flag("UPDATE_REQUIRE_SIGNED=true\n", "UPDATE_REQUIRE_SIGNED"));
+        assert!(env_flag("UPDATE_REQUIRE_SIGNED=\"1\"\n", "UPDATE_REQUIRE_SIGNED"));
+        assert!(!env_flag("UPDATE_REQUIRE_SIGNED=\n", "UPDATE_REQUIRE_SIGNED"));
+        assert!(!env_flag("", "UPDATE_REQUIRE_SIGNED"));
+    }
+
+    #[tokio::test]
+    async fn pre_update_backups_are_private_and_rotated() {
+        let dir = std::env::temp_dir().join(format!("updater-backups-{}", uuid::Uuid::new_v4().simple()));
+        for i in 0..(KEEP_PRE_UPDATE_BACKUPS + 3) {
+            store_backup(&dir, &dir.join(format!("pre-update-1.0.0-2026010{:02}.sql", i)), b"dump").await.unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(15));
+        }
+        tokio::fs::write(dir.join("manual.sql"), b"keep").await.unwrap();
+        let mut names: Vec<String> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().to_string()).collect();
+        names.sort();
+        assert_eq!(names.len(), KEEP_PRE_UPDATE_BACKUPS + 1);
+        assert!(names.contains(&"manual.sql".to_string()));
+        assert!(!names.contains(&"pre-update-1.0.0-202601000.sql".to_string()));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(dir.join(&names[0])).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

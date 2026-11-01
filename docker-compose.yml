@@ -1,18 +1,30 @@
 # Fixed project name so the built-in updater manages exactly this stack
 name: rustwebshop
 
+# Hardening shared by all services: no privilege escalation (setuid binaries), bounded log files
+x-hardening: &hardening
+  security_opt:
+    - no-new-privileges:true
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "5"
+
 services:
   db:
     image: postgres:16-alpine
     restart: unless-stopped
+    <<: *hardening
     environment:
       POSTGRES_DB: shop_db
       POSTGRES_USER: shop_user
       POSTGRES_PASSWORD: ${DB_PASSWORD:-local_dev_password}
     volumes:
       - pgdata:/var/lib/postgresql/data
+    # Only the backend can reach the database (internal network, no internet access)
     networks:
-      - shop_net
+      - db_net
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U shop_user -d shop_db"]
       interval: 3s
@@ -24,6 +36,7 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     restart: unless-stopped
+    <<: *hardening
     environment:
       DATABASE_URL: postgres://shop_user:${DB_PASSWORD:-local_dev_password}@db:5432/shop_db
       PORT: 8000
@@ -44,6 +57,15 @@ services:
     volumes:
       - uploads_data:/app/uploads
       - updater_secrets:/secrets:ro
+    # Runs as an unprivileged user; only the entrypoint needs these to fix the uploads ownership and drop root
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 60s
     depends_on:
       db:
         condition: service_healthy
@@ -51,6 +73,7 @@ services:
         condition: service_completed_successfully
     networks:
       - shop_net
+      - db_net
       - updater_net
 
   storefront:
@@ -58,6 +81,7 @@ services:
       context: ./storefront
       dockerfile: Dockerfile
     restart: unless-stopped
+    <<: *hardening
     environment:
       PORT: 3000
       BACKEND_INTERNAL_URL: http://backend:8000
@@ -66,6 +90,7 @@ services:
     ports:
       # PUBLISH_ADDR=127.0.0.1 when a reverse proxy (built-in or your own) serves the domains
       - "${PUBLISH_ADDR:-0.0.0.0}:${STOREFRONT_PORT:-8080}:3000"
+    cap_drop: [ALL]
     depends_on:
       - backend
     networks:
@@ -76,6 +101,7 @@ services:
       context: ./admin
       dockerfile: Dockerfile
     restart: unless-stopped
+    <<: *hardening
     environment:
       PORT: 4000
       BACKEND_INTERNAL_URL: http://backend:8000
@@ -85,6 +111,7 @@ services:
       BODY_SIZE_LIMIT: 50M
     ports:
       - "${PUBLISH_ADDR:-0.0.0.0}:${ADMIN_PORT:-4000}:4000"
+    cap_drop: [ALL]
     depends_on:
       - backend
     networks:
@@ -97,6 +124,7 @@ services:
       context: ./updater
       dockerfile: Dockerfile
     restart: unless-stopped
+    <<: *hardening
     environment:
       RUST_LOG: info
     volumes:
@@ -134,6 +162,7 @@ services:
       context: ./deploy/proxy
     profiles: ["proxy"]
     restart: unless-stopped
+    <<: *hardening
     environment:
       SHOP_DOMAIN: ${SHOP_DOMAIN:-}
       ADMIN_DOMAIN: ${ADMIN_DOMAIN:-}
@@ -144,6 +173,9 @@ services:
     volumes:
       - caddy_data:/data
       - caddy_config:/config
+    # Caddy only needs to bind ports 80/443
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
     depends_on:
       - storefront
       - admin
@@ -153,6 +185,10 @@ services:
 networks:
   shop_net:
     driver: bridge
+  # Database link: backend and db only, without internet access
+  db_net:
+    driver: bridge
+    internal: true
   # Private link between backend and updater only
   updater_net:
     driver: bridge

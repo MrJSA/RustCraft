@@ -33,6 +33,13 @@ async fn main() -> anyhow::Result<()> {
         .parse()
         .unwrap_or(8000);
 
+    if db::weak_database_password(&database_url) {
+        tracing::warn!(
+            "SECURITY: the database password is a published default or shorter than 16 characters. \
+             Set a long random DB_PASSWORD (openssl rand -hex 24) and change it in PostgreSQL too (see HARDEN.md)."
+        );
+    }
+
     // Database connection with exponential retry loop for Docker orchestration
     let mut pool = None;
     let mut retry_count = 0;
@@ -71,8 +78,14 @@ async fn main() -> anyhow::Result<()> {
     let uploads = axum::Router::new()
         .nest_service("/uploads", tower_http::services::ServeDir::new("uploads"))
         .layer(axum::middleware::from_fn_with_state(pool.clone(), crate::routes::shop_features::guard_uploads));
+    // Readiness check for the updater (includes the database). Not reachable from outside: the
+    // storefront and admin only forward /api/… paths and the backend port is bound to 127.0.0.1.
+    let health = axum::Router::new()
+        .route("/health", axum::routing::get(health))
+        .with_state(pool.clone());
     let app = routes::create_router(pool)
         .merge(uploads)
+        .merge(health)
         .layer(TraceLayer::new_for_http())
         .layer(axum::extract::DefaultBodyLimit::max(50 * 1024 * 1024));
 
@@ -85,3 +98,10 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+
+async fn health(axum::extract::State(pool): axum::extract::State<sqlx::PgPool>) -> axum::http::StatusCode {
+    match sqlx::query_scalar::<_, i32>("SELECT 1").fetch_one(&pool).await {
+        Ok(_) => axum::http::StatusCode::OK,
+        Err(_) => axum::http::StatusCode::SERVICE_UNAVAILABLE,
+    }
+}
