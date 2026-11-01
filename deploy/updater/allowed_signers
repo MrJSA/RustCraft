@@ -4,3 +4,4 @@
 # The updater reads this file from the version that is currently installed. As soon as it contains a key,
 # a release is only installed when its tag (vX.Y.Z) was signed with one of these keys (git tag -s).
 # Without keys, unsigned releases are installed with a warning (set UPDATE_REQUIRE_SIGNED=true in .env to refuse them).
+releases namespaces="git" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIB5DC+k0RSUhWHDyTSd/Aw+4nddLwalAAfncd0KCom4i
