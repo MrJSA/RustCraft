@@ -33,6 +33,7 @@ pub const MIGRATIONS: &[(&str, &str)] = &[
     ("0026_package_sizes", include_str!("../migrations/0026_package_sizes.sql")),
     ("0027_order_notifications", include_str!("../migrations/0027_order_notifications.sql")),
     ("0028_withdrawal_texts_used_and_digital_goods", include_str!("../migrations/0028_withdrawal_texts_used_and_digital_goods.sql")),
+    ("0029_encrypted_backups", include_str!("../migrations/0029_encrypted_backups.sql")),
 ];
 
 /// Passwords published in this repository (compose fallback and `.env.example`).

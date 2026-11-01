@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod backup;
+pub mod backup_crypto;
 pub mod branding;
 pub mod checkout;
 pub mod document_generator;

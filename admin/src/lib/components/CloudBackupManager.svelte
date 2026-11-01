@@ -1,7 +1,7 @@
 <script>
   import { onMount, onDestroy } from 'svelte';
   import { page } from '$app/stores';
-  import { CloudUpload, CheckCircle2, AlertCircle, Loader2, ExternalLink, PlugZap, Unplug, HelpCircle, Clock } from 'lucide-svelte';
+  import { CloudUpload, CheckCircle2, AlertCircle, Loader2, ExternalLink, PlugZap, Unplug, HelpCircle, Clock, Lock, ShieldAlert } from 'lucide-svelte';
 
   $: isSuperadmin = $page.data.admin?.role === 'superadmin';
 
@@ -22,6 +22,8 @@
   let hourUtc = 2;
   let keepCount = 30;
   let includeMedia = true;
+  // age public key (age1…) the backups are encrypted to — the private key never comes here
+  let recipient = '';
 
   const frequencies = [
     { value: 'daily', label: 'Daily', hint: 'every night' },
@@ -54,6 +56,7 @@
       hourUtc = s.backup_hour_utc ?? 2;
       keepCount = s.keep_count ?? 30;
       includeMedia = s.include_media ?? true;
+      recipient = s.encryption_recipient || '';
     }
     if (s.running) startPolling();
   }
@@ -97,7 +100,8 @@
           frequency,
           backup_hour_utc: Number(hourUtc),
           keep_count: Number(keepCount),
-          include_media: includeMedia
+          include_media: includeMedia,
+          encryption_recipient: recipient
         })
       });
       token = '';
@@ -213,6 +217,13 @@
       </div>
     {/if}
 
+    {#if status?.encryption_warning}
+      <div class="p-4 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-200 text-xs leading-relaxed flex items-start gap-2.5">
+        <ShieldAlert size={18} class="flex-shrink-0 text-rose-400" />
+        <span><strong class="text-rose-300">Backups are not encrypted.</strong> {status.encryption_warning} See <em>Encryption</em> below.</span>
+      </div>
+    {/if}
+
     <!-- Status -->
     {#if status?.has_token || status?.last_status}
       <div class="p-4 rounded-2xl bg-slate-950 border border-slate-800 grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs">
@@ -317,6 +328,22 @@
           <Unplug size={14} /> Disconnect
         </button>
       {/if}
+    </div>
+
+    <!-- Encryption -->
+    <div class="p-4 rounded-2xl bg-slate-950 border {status?.encrypted ? 'border-emerald-500/30' : 'border-slate-800'} space-y-2 text-xs">
+      <div class="font-bold text-slate-200 flex items-center gap-1.5">
+        <Lock size={14} class={status?.encrypted ? 'text-emerald-400' : 'text-slate-500'} /> Encryption
+        {#if status?.encrypted}<span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">ON</span>{/if}
+      </div>
+      <label for="backup-recipient" class="block font-semibold text-slate-400">age public key</label>
+      <input id="backup-recipient" type="text" bind:value={recipient} placeholder="age1…" autocomplete="off" spellcheck="false" class={inputClass} />
+      <p class="text-[11px] text-slate-500 leading-relaxed">
+        Backups are encrypted with this <strong class="text-slate-300">public</strong> key before they leave the server (files end in <code>.zip.age</code>).
+        Only the matching private key (<code>AGE-SECRET-KEY-1…</code>) can open them. <strong class="text-slate-300">Never enter the private key here</strong> —
+        keep it offline in two places; you need it to restore. Create both with <code>age-keygen -o shop-backup-key.txt</code>
+        (<a href="https://github.com/MrJSA/RustCraft/wiki/Backups" target="_blank" rel="noopener noreferrer" class="text-sky-400 hover:underline">guide</a>).
+      </p>
     </div>
 
     <!-- Schedule -->

@@ -51,6 +51,8 @@ pub struct BackupSettings {
     pub last_size_bytes: Option<i64>,
     pub last_url: Option<String>,
     pub failure_notified: bool,
+    /// age public key (age1…) the backups are encrypted to; empty = not encrypted (warning in the admin)
+    pub encryption_recipient: String,
 }
 
 impl BackupSettings {
@@ -60,6 +62,18 @@ impl BackupSettings {
 
     pub fn is_configured(&self) -> bool {
         !self.github_repo.is_empty() && !self.github_token.is_empty()
+    }
+
+    pub fn is_encrypted(&self) -> bool {
+        !self.encryption_recipient.trim().is_empty()
+    }
+
+    /// Shown in the admin while backups leave the server unencrypted.
+    pub fn encryption_warning(&self) -> Option<&'static str> {
+        (self.enabled && !self.is_encrypted()).then_some(
+            "Backups are uploaded UNENCRYPTED: they contain names, addresses and orders of your customers. \
+             Enter an age public key to encrypt them — unencrypted uploads will be refused in a future version.",
+        )
     }
 
     fn hour(&self) -> u32 {
@@ -112,6 +126,9 @@ impl BackupSettings {
             "last_file": self.last_file,
             "last_size_bytes": self.last_size_bytes,
             "last_url": self.last_url,
+            "encryption_recipient": self.encryption_recipient,
+            "encrypted": self.is_encrypted(),
+            "encryption_warning": self.encryption_warning(),
             "releases_url": (!self.github_repo.is_empty()).then(|| format!("https://github.com/{}/releases", self.github_repo)),
         })
     }
@@ -292,7 +309,22 @@ async fn create_backup(pool: &PgPool, settings: &BackupSettings) -> Result<Backu
         .map_err(|e| format!("Creating the backup archive crashed: {}", e))??;
     let _ = tokio::fs::remove_file(&dump_path).await;
 
-    let size = tokio::fs::metadata(&zip_path).await.map_err(|e| e.to_string())?.len();
+    // Encrypt to the owner's public key: GitHub (and anyone with the token) only ever sees ciphertext
+    let (upload_path, file_name) = if settings.is_encrypted() {
+        let encrypted_name = format!("{}{}", file_name, crate::services::backup_crypto::ENCRYPTED_SUFFIX);
+        let encrypted_path = work.0.join(&encrypted_name);
+        let (src, dst, key) = (zip_path.clone(), encrypted_path.clone(), settings.encryption_recipient.trim().to_string());
+        tokio::task::spawn_blocking(move || crate::services::backup_crypto::encrypt_file(&src, &dst, &key))
+            .await
+            .map_err(|e| format!("Encrypting the backup crashed: {}", e))??;
+        let _ = tokio::fs::remove_file(&zip_path).await;
+        (encrypted_path, encrypted_name)
+    } else {
+        warn!("Backup is uploaded unencrypted — set an age public key in Settings → Export & Backups");
+        (zip_path, file_name)
+    };
+
+    let size = tokio::fs::metadata(&upload_path).await.map_err(|e| e.to_string())?.len();
     if size > MAX_ASSET_BYTES {
         return Err(format!(
             "The backup is {} — GitHub accepts files up to 2 GB. Turn off \"Include uploaded files\" or clean up the media library.",
@@ -303,13 +335,14 @@ async fn create_backup(pool: &PgPool, settings: &BackupSettings) -> Result<Backu
     let tag = format!("{}{}", TAG_PREFIX, stamp);
     let title = format!("Backup {} UTC", now.format("%Y-%m-%d %H:%M"));
     let body = format!(
-        "Automatic backup of **{}**.\n\n- Database: complete dump (`database.sql`)\n- Uploaded files: {}\n- Size: {}\n\nTo restore: shop admin → Settings → Export & Backups → Restore a Backup (see https://github.com/MrJSA/RustCraft/wiki/Restoring-a-Backup).",
+        "Automatic backup of **{}**.\n\n- Database: complete dump (`database.sql`)\n- Uploaded files: {}\n- Encryption: {}\n- Size: {}\n\nTo restore: shop admin → Settings → Export & Backups → Restore a Backup (see https://github.com/MrJSA/RustCraft/wiki/Restoring-a-Backup).",
         if store_name.is_empty() { "the shop" } else { &store_name },
         if settings.include_media { format!("{} file(s) in `uploads/`", file_count) } else { "not included".to_string() },
+        if settings.is_encrypted() { "age (needs the private key of the shop owner)" } else { "**none — this file contains readable customer data**" },
         human_size(size)
     );
     let release = gh.create_draft_release(&tag, &title, &body).await?;
-    if let Err(e) = gh.upload_asset(&release, &file_name, &zip_path, size).await {
+    if let Err(e) = gh.upload_asset(&release, &file_name, &upload_path, size).await {
         let _ = gh.delete_release(release.id).await;
         return Err(e);
     }
@@ -322,6 +355,9 @@ async fn create_backup(pool: &PgPool, settings: &BackupSettings) -> Result<Backu
     })?;
 
     let mut notes = Vec::new();
+    if !settings.is_encrypted() {
+        notes.push("WARNING: not encrypted — set an age public key.".to_string());
+    }
     match gh.prune(settings.keep_count.max(1) as usize).await {
         Ok(0) => {}
         Ok(n) => notes.push(format!("{} old backup(s) removed.", n)),
@@ -426,6 +462,11 @@ Or on the command line (in the shop folder on the server):
 
 Full guide: https://github.com/MrJSA/RustCraft/wiki/Restoring-a-Backup
 ";
+
+/// Release assets that are shop backups: `shop-backup-….zip` or the encrypted `shop-backup-….zip.age`.
+pub fn is_backup_file(name: &str) -> bool {
+    name.ends_with(".zip") || name.ends_with(".zip.age")
+}
 
 pub(crate) fn human_size(bytes: u64) -> String {
     let b = bytes as f64;
@@ -632,7 +673,7 @@ impl GitHub {
         let req = self
             .request(Method::POST, &release.upload_url)
             .query(&[("name", file_name)])
-            .header(reqwest::header::CONTENT_TYPE, "application/zip")
+            .header(reqwest::header::CONTENT_TYPE, if file_name.ends_with(".zip") { "application/zip" } else { "application/octet-stream" })
             .header(reqwest::header::CONTENT_LENGTH, size)
             .timeout(std::time::Duration::from_secs(3 * 3600))
             .body(body);
@@ -662,6 +703,7 @@ impl GitHub {
     }
 
     /// Keeps the newest `keep` backups; removes older ones (release + tag) and leftover drafts.
+    /// Releases are matched by their `backup-…` tag, so plain (`.zip`) and encrypted (`.zip.age`) backups count alike.
     async fn prune(&self, keep: usize) -> Result<usize, String> {
         let mut backups = Vec::new();
         for page in 1..=50 {
@@ -716,10 +758,11 @@ impl GitHub {
                     continue;
                 }
                 let assets = r["assets"].as_array().cloned().unwrap_or_default();
-                let Some(asset) = assets.iter().find(|a| a["name"].as_str().is_some_and(|n| n.ends_with(".zip"))) else { continue };
+                let Some(asset) = assets.iter().find(|a| a["name"].as_str().is_some_and(is_backup_file)) else { continue };
                 backups.push(json!({
                     "asset_id": asset["id"],
                     "file": asset["name"],
+                    "encrypted": asset["name"].as_str().is_some_and(|n| n.ends_with(crate::services::backup_crypto::ENCRYPTED_SUFFIX)),
                     "size_bytes": asset["size"],
                     "title": r["name"],
                     "tag": tag,
@@ -768,6 +811,10 @@ This private repository stores the automatic backups of the web shop.
 Every backup is a **release** (see *Releases* on the right) with one ZIP file containing the
 complete database dump (`database.sql`) and the uploaded files (`uploads/`).
 
+Backups ending in `.zip.age` are encrypted with [age](https://age-encryption.org) to the shop owner's
+public key. Only the matching private key (`AGE-SECRET-KEY-1…`, kept offline) can open them:
+`age -d -i shop-backup-key.txt -o backup.zip shop-backup-….zip.age`
+
 Keep this repository **private** — the backups contain customer data.
 To restore a backup open the shop admin → *Settings → Export & Backups* → *Restore a Backup*
 (details: https://github.com/MrJSA/RustCraft/wiki/Backups).
@@ -813,9 +860,14 @@ mod tests {
             last_size_bytes: None,
             last_url: None,
             failure_notified: false,
+            encryption_recipient: String::new(),
         };
         let now = t("2026-10-25T02:05:00Z");
         assert!(s.is_due(now), "never backed up");
+        // Enabled without a key: the admin shows the warning; with a key it disappears
+        assert!(s.encryption_warning().is_some());
+        s.encryption_recipient = "age1example".into();
+        assert!(s.encryption_warning().is_none() && s.is_encrypted());
         s.last_success_at = Some(t("2026-10-25T02:01:00Z"));
         s.last_attempt_at = s.last_success_at;
         s.last_status = Some("success".into());
@@ -827,6 +879,13 @@ mod tests {
         assert!(s.is_due(t("2026-10-26T03:00:00Z")));
         s.enabled = false;
         assert!(!s.is_due(t("2026-10-27T03:00:00Z")));
+    }
+
+    #[test]
+    fn plain_and_encrypted_backups_are_listed() {
+        assert!(is_backup_file("shop-backup-20261101-020000.zip"));
+        assert!(is_backup_file("shop-backup-20261101-020000.zip.age"));
+        assert!(!is_backup_file("notes.txt") && !is_backup_file("shop-backup.age"));
     }
 
     #[test]

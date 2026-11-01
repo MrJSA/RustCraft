@@ -1,12 +1,13 @@
 <script>
   import { onMount, onDestroy } from 'svelte';
   import { page } from '$app/stores';
-  import { RotateCcw, Search, Upload, CheckCircle2, AlertCircle, ShieldAlert, Loader2 } from 'lucide-svelte';
+  import { RotateCcw, Search, Upload, CheckCircle2, AlertCircle, ShieldAlert, Loader2, KeyRound } from 'lucide-svelte';
 
   $: isSuperadmin = $page.data.admin?.role === 'superadmin';
 
   // Uploads go through the admin server, which accepts requests up to 50 MB
-  const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
+  // (minus a little room for the multipart form around the file)
+  const MAX_UPLOAD_BYTES = 50 * 1024 * 1024 - 64 * 1024;
 
   let hasSavedToken = false;
   let repo = '';
@@ -19,6 +20,9 @@
   let keepBackupsOff = false;
   let understood = false;
   let error = '';
+  // Private key for encrypted backups: only kept in this page until the restore request is sent
+  let identity = '';
+  let identityInput;
 
   // Progress of a running restore
   let restore = null;
@@ -28,7 +32,8 @@
   async function api(path, options = {}) {
     const res = await fetch(`/api/v1/admin/backup/${path}`, {
       ...options,
-      headers: { 'Content-Type': 'application/json', ...(options.headers || {}) }
+      // FormData sets its own multipart content type
+      headers: options.body instanceof FormData ? {} : { 'Content-Type': 'application/json', ...(options.headers || {}) }
     });
     const body = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(body.error || `Request failed (${res.status})`);
@@ -77,6 +82,27 @@
     }
   }
 
+  /** Reads an age identity file (age-keygen output) into the key field. */
+  async function pickIdentityFile(event) {
+    const f = event.target.files?.[0];
+    event.target.value = '';
+    if (!f) return;
+    if (f.size > 16 * 1024) {
+      error = 'This is not an age key file (it is too large).';
+      return;
+    }
+    identity = await f.text();
+  }
+
+  function forgetIdentity() {
+    identity = '';
+    if (identityInput) identityInput.value = '';
+  }
+
+  const isEncryptedName = (name) => !!name && name.endsWith('.age');
+  $: needsKey = (selected && selected.encrypted) || isEncryptedName(uploadFile?.name);
+  $: keyLooksPublic = identity.trim().startsWith('age1');
+
   function confirmRestore(name) {
     return confirm(
       `Restore "${name}"?\n\nALL current data of this shop (orders, customers, products, settings, admin accounts) is replaced by the backup. This cannot be undone.`
@@ -94,9 +120,11 @@
           github_token: token,
           asset_id: selected.asset_id,
           file: selected.file,
-          keep_backups_off: keepBackupsOff
+          keep_backups_off: keepBackupsOff,
+          identity: selected.encrypted ? identity : undefined
         })
       });
+      forgetIdentity();
       startPolling();
     } catch (e) {
       error = e.message;
@@ -109,11 +137,12 @@
     restore = { state: 'running', step: 'Uploading the backup…', file: uploadFile.name };
     try {
       const query = new URLSearchParams({ file: uploadFile.name, keep_backups_off: String(keepBackupsOff) });
-      restore = await api(`restore/upload?${query}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/zip' },
-        body: uploadFile
-      });
+      // The key goes in the request body (never the URL or a header), so no proxy log can contain it
+      const form = new FormData();
+      if (identity.trim()) form.append('identity', identity);
+      form.append('file', uploadFile);
+      restore = await api(`restore/upload?${query}`, { method: 'POST', body: form });
+      forgetIdentity();
       startPolling();
     } catch (e) {
       restore = null;
@@ -187,7 +216,10 @@
   onMount(() => {
     if (isSuperadmin) load();
   });
-  onDestroy(stopPolling);
+  onDestroy(() => {
+    stopPolling();
+    forgetIdentity();
+  });
 
   const inputClass = 'w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-xs font-mono focus:outline-none focus:border-orange-500';
 </script>
@@ -279,13 +311,13 @@
                   <input type="radio" bind:group={selected} value={b} class="accent-sky-600" />
                   <span class="flex-1 min-w-0">
                     <span class="block font-semibold text-slate-200 truncate">{b.title || b.file}</span>
-                    <span class="block text-[11px] text-slate-500 truncate">{fmtDate(b.created_at)} · {b.file}</span>
+                    <span class="block text-[11px] text-slate-500 truncate">{fmtDate(b.created_at)} · {b.file}{#if b.encrypted} · 🔒 encrypted{/if}</span>
                   </span>
                   <span class="text-[11px] text-slate-400 whitespace-nowrap">{fmtSize(b.size_bytes)}</span>
                 </label>
               {/each}
             </div>
-            <button type="button" on:click={restoreFromGitHub} disabled={!selected || !understood} class="px-4 py-2.5 rounded-xl bg-orange-600 hover:bg-orange-500 disabled:opacity-50 text-white text-xs font-bold flex items-center gap-2">
+            <button type="button" on:click={restoreFromGitHub} disabled={!selected || !understood || (selected.encrypted && !identity.trim())} class="px-4 py-2.5 rounded-xl bg-orange-600 hover:bg-orange-500 disabled:opacity-50 text-white text-xs font-bold flex items-center gap-2">
               <RotateCcw size={14} /> Restore selected backup
             </button>
           {/if}
@@ -295,14 +327,41 @@
       <!-- From a file -->
       <div class="space-y-3 pt-4 border-t border-slate-800">
         <div class="text-xs font-bold text-slate-300">2. Or from a backup file</div>
-        <p class="text-[11px] text-slate-500">A <code>shop-backup-….zip</code> downloaded from GitHub (up to 50 MB).</p>
+        <p class="text-[11px] text-slate-500">A <code>shop-backup-….zip</code> or encrypted <code>….zip.age</code> downloaded from GitHub (up to 50 MB).</p>
         <div class="flex flex-col sm:flex-row sm:items-center gap-3">
-          <input bind:this={fileInput} type="file" accept=".zip,application/zip" on:change={pickFile} class="text-xs text-slate-300 file:mr-3 file:px-3.5 file:py-2 file:rounded-xl file:border-0 file:bg-slate-800 file:text-white file:text-xs file:font-bold hover:file:bg-slate-700" />
-          <button type="button" on:click={restoreFromUpload} disabled={!uploadFile || !understood} class="px-4 py-2.5 rounded-xl bg-orange-600 hover:bg-orange-500 disabled:opacity-50 text-white text-xs font-bold flex items-center gap-2 self-start">
+          <input bind:this={fileInput} type="file" accept=".zip,.age,application/zip" on:change={pickFile} class="text-xs text-slate-300 file:mr-3 file:px-3.5 file:py-2 file:rounded-xl file:border-0 file:bg-slate-800 file:text-white file:text-xs file:font-bold hover:file:bg-slate-700" />
+          <button type="button" on:click={restoreFromUpload} disabled={!uploadFile || !understood || (isEncryptedName(uploadFile.name) && !identity.trim())} class="px-4 py-2.5 rounded-xl bg-orange-600 hover:bg-orange-500 disabled:opacity-50 text-white text-xs font-bold flex items-center gap-2 self-start">
             <Upload size={14} /> Upload and restore
           </button>
         </div>
       </div>
+
+      {#if needsKey || identity}
+        <!-- Private key for encrypted backups -->
+        <div class="space-y-2 pt-4 border-t border-slate-800 text-xs">
+          <div class="font-bold text-slate-300 flex items-center gap-1.5"><KeyRound size={14} class="text-amber-400" /> Private key of the backups</div>
+          <p class="text-[11px] text-slate-500 leading-relaxed">
+            This backup is encrypted. Paste the <code>AGE-SECRET-KEY-1…</code> line or choose your key file (<code>shop-backup-key.txt</code>).
+            The key is only used for this restore — it is not saved, logged or shown again.
+          </p>
+          <textarea
+            bind:value={identity}
+            rows="2"
+            placeholder="AGE-SECRET-KEY-1…"
+            autocomplete="off"
+            spellcheck="false"
+            class="{inputClass} resize-none"
+            style="-webkit-text-security: disc;"
+          ></textarea>
+          <div class="flex items-center gap-3 flex-wrap">
+            <input bind:this={identityInput} type="file" accept=".txt,.key,text/plain" on:change={pickIdentityFile} class="text-xs text-slate-300 file:mr-3 file:px-3.5 file:py-2 file:rounded-xl file:border-0 file:bg-slate-800 file:text-white file:text-xs file:font-bold hover:file:bg-slate-700" />
+            {#if identity}<button type="button" on:click={forgetIdentity} class="text-[11px] text-slate-400 hover:text-white underline">Remove key</button>{/if}
+          </div>
+          {#if keyLooksPublic}
+            <p class="text-[11px] text-rose-300">That is the public key (age1…). Restoring needs the private key from the same key file.</p>
+          {/if}
+        </div>
+      {/if}
 
       <div class="space-y-2.5 pt-4 border-t border-slate-800">
         <label class="flex items-start gap-2.5 text-xs text-slate-300 cursor-pointer">

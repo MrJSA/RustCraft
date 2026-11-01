@@ -32,3 +32,6 @@ krilla = { version = "0.7.0", default-features = false, features = ["raster-imag
 lopdf = { version = "0.46.0", default-features = false }
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
 ttf-parser = "0.25"
+# Off-site backups are encrypted to the shop owner's age public key
+age = "0.11"
+zeroize = "1"

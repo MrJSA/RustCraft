@@ -12,6 +12,7 @@ use crate::models::{
     UpdateShippingZoneRequest, UpdateStoreSettingsRequest, UpdateVariantRequest,
 };
 use crate::middleware::CurrentAdmin;
+use crate::services::backup_crypto::SecretIdentity;
 use crate::services::document_generator::DocumentGenerator;
 use axum::{
     extract::{Multipart, Path, Query, State},
@@ -114,7 +115,7 @@ pub fn admin_router(pool: PgPool) -> Router<PgPool> {
         .route("/backup/disconnect", post(admin_disconnect_backup))
         .route("/backup/restore/list", post(admin_list_restorable_backups))
         .route("/backup/restore/github", post(admin_restore_from_github))
-        .route("/backup/restore/upload", post(admin_restore_from_upload))
+        .route("/backup/restore/upload", post(admin_restore_from_upload).layer(axum::extract::DefaultBodyLimit::max(MAX_RESTORE_UPLOAD_BYTES)))
         .route("/backup/restore/status", get(admin_restore_status))
         .merge(crate::routes::shop_features::admin_routes())
         .layer(axum::middleware::from_fn_with_state(pool, crate::middleware::admin_auth_middleware));
@@ -4612,6 +4613,8 @@ struct UpdateBackupSettingsRequest {
     backup_hour_utc: Option<i16>,
     keep_count: Option<i32>,
     include_media: Option<bool>,
+    /// age public key (age1…); empty removes it
+    encryption_recipient: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -4661,6 +4664,18 @@ async fn admin_update_backup_settings(
     }
     let enabled = payload.enabled.unwrap_or(current.enabled);
     let include_media = payload.include_media.unwrap_or(current.include_media);
+    let recipient = match payload.encryption_recipient.as_deref().map(str::trim) {
+        Some("") => String::new(),
+        Some(k) => crate::services::backup_crypto::normalize_recipient(k).map_err(|e| (StatusCode::BAD_REQUEST, e))?,
+        None => current.encryption_recipient.clone(),
+    };
+    // New setups must encrypt; shops that already upload backups get a warning until they add a key
+    if enabled && recipient.is_empty() && (!current.enabled || !current.encryption_recipient.is_empty()) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Backups contain customer data: enter an age public key (age1…) so they are encrypted before they leave the server.".to_string(),
+        ));
+    }
 
     // Switching on (or changing the target) only works with a repository that really accepts backups
     let target_changed = repo != current.github_repo || token != current.github_token;
@@ -4678,7 +4693,7 @@ async fn admin_update_backup_settings(
 
     sqlx::query(
         "UPDATE backup_settings SET enabled = $1, github_repo = $2, github_token = $3, frequency = $4, backup_hour_utc = $5,
-         keep_count = $6, include_media = $7, token_expires_at = $8, updated_at = NOW() WHERE id = 1",
+         keep_count = $6, include_media = $7, token_expires_at = $8, encryption_recipient = $9, updated_at = NOW() WHERE id = 1",
     )
     .bind(enabled)
     .bind(&repo)
@@ -4688,10 +4703,14 @@ async fn admin_update_backup_settings(
     .bind(keep_count)
     .bind(include_media)
     .bind(&token_expires_at)
+    .bind(&recipient)
     .execute(&pool)
     .await
     .map_err(backup_db_err)?;
-    tracing::info!("Backup settings changed by admin '{}' (enabled: {}, repo: {}, {})", admin.username, enabled, repo, frequency);
+    tracing::info!(
+        "Backup settings changed by admin '{}' (enabled: {}, repo: {}, {}, encrypted: {})",
+        admin.username, enabled, repo, frequency, !recipient.is_empty()
+    );
 
     let saved = BackupSettings::load(&pool).await.map_err(backup_db_err)?;
     // A backup that is due right away (e.g. the very first one) starts immediately
@@ -4773,13 +4792,16 @@ async fn admin_disconnect_backup(
     Ok(Json(s.public_json()))
 }
 
-#[derive(Debug, Deserialize)]
+/// No `Debug`: the request carries the private key of encrypted backups.
+#[derive(Deserialize)]
 struct RestoreFromGitHubRequest {
     github_repo: Option<String>,
     github_token: Option<String>,
     asset_id: u64,
     file: Option<String>,
     keep_backups_off: Option<bool>,
+    /// age private key for `.zip.age` backups — used in memory only, never stored or logged
+    identity: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -4827,29 +4849,44 @@ async fn admin_restore_from_github(
     require_backup_admin(&admin)?;
     let (repo, token) = restore_target(&pool, payload.github_repo, payload.github_token).await?;
     let file = payload.file.unwrap_or_else(|| format!("backup {}", payload.asset_id));
+    let identity = payload.identity.map(SecretIdentity::new).filter(|i| !i.is_empty());
+    if file.ends_with(crate::services::backup_crypto::ENCRYPTED_SUFFIX) && identity.is_none() {
+        return Err((StatusCode::BAD_REQUEST, "This backup is encrypted. Enter the private key (AGE-SECRET-KEY-1…) first.".to_string()));
+    }
     tracing::warn!("Restore of {} from {} started by admin '{}'", file, repo, admin.username);
     let source = Source::GitHub { repo, token, asset_id: payload.asset_id };
-    restore::start(pool, source, file, payload.keep_backups_off.unwrap_or(false)).map_err(|e| (StatusCode::CONFLICT, e))?;
+    restore::start(pool, source, file, payload.keep_backups_off.unwrap_or(false), identity).map_err(|e| (StatusCode::CONFLICT, e))?;
     Ok((StatusCode::ACCEPTED, Json(restore::status())))
 }
 
+/// Multipart form: `file` (the backup) and, for encrypted backups, `identity` (the private key as text).
+/// The key travels in the body, not in a header or the URL, so proxies and access logs never see it.
 async fn admin_restore_from_upload(
     State(pool): State<PgPool>,
     Extension(admin): Extension<CurrentAdmin>,
     Query(query): Query<RestoreUploadQuery>,
-    body: axum::body::Body,
+    mut multipart: axum::extract::Multipart,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
     use crate::services::restore::{self, Source};
     require_backup_admin(&admin)?;
-    let bytes = axum::body::to_bytes(body, MAX_RESTORE_UPLOAD_BYTES).await.map_err(|_| {
-        (StatusCode::PAYLOAD_TOO_LARGE, "The file is too large to upload. Restore it straight from GitHub instead.".to_string())
-    })?;
-    if bytes.is_empty() {
-        return Err((StatusCode::BAD_REQUEST, "No file was uploaded".to_string()));
+    let too_large = || (StatusCode::PAYLOAD_TOO_LARGE, "The file is too large to upload. Restore it straight from GitHub instead.".to_string());
+    let mut bytes = None;
+    let mut identity = None;
+    while let Some(field) = multipart.next_field().await.map_err(|_| too_large())? {
+        match field.name() {
+            Some("file") => bytes = Some(field.bytes().await.map_err(|_| too_large())?),
+            Some("identity") => identity = Some(SecretIdentity::new(field.text().await.map_err(|_| too_large())?)),
+            _ => {}
+        }
+    }
+    let bytes = bytes.filter(|b| !b.is_empty()).ok_or((StatusCode::BAD_REQUEST, "No file was uploaded".to_string()))?;
+    let identity = identity.filter(|i| !i.is_empty());
+    if bytes.starts_with(b"age-encryption.org/v1\n") && identity.is_none() {
+        return Err((StatusCode::BAD_REQUEST, "This backup is encrypted. Enter the private key (AGE-SECRET-KEY-1…) first.".to_string()));
     }
     let file = query.file.filter(|f| !f.trim().is_empty()).unwrap_or_else(|| "uploaded backup".to_string());
     tracing::warn!("Restore of uploaded {} started by admin '{}'", file, admin.username);
-    restore::start(pool, Source::Upload(bytes), file, query.keep_backups_off.unwrap_or(false)).map_err(|e| (StatusCode::CONFLICT, e))?;
+    restore::start(pool, Source::Upload(bytes), file, query.keep_backups_off.unwrap_or(false), identity).map_err(|e| (StatusCode::CONFLICT, e))?;
     Ok((StatusCode::ACCEPTED, Json(restore::status())))
 }
 

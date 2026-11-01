@@ -6,6 +6,7 @@
 //! migrations a backup from an older shop version still needs and starts with fresh connections.
 
 use crate::services::backup::{human_size, GitHub, TempDir};
+use crate::services::backup_crypto::{self, SecretIdentity};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use sqlx::PgPool;
@@ -62,7 +63,8 @@ pub enum Source {
 }
 
 /// Starts a restore in the background; progress is read with [`status`].
-pub fn start(pool: PgPool, source: Source, file: String, keep_backups_off: bool) -> Result<(), String> {
+/// `identity` is the private key for encrypted (`.zip.age`) backups; it lives only in memory and is zeroized after use.
+pub fn start(pool: PgPool, source: Source, file: String, keep_backups_off: bool, identity: Option<SecretIdentity>) -> Result<(), String> {
     if crate::services::backup::is_running() {
         return Err("A backup is being created right now. Wait until it has finished.".to_string());
     }
@@ -80,7 +82,7 @@ pub fn start(pool: PgPool, source: Source, file: String, keep_backups_off: bool)
         });
     }
     tokio::spawn(async move {
-        match run(&pool, source, keep_backups_off).await {
+        match run(&pool, source, keep_backups_off, identity).await {
             Ok(message) => {
                 info!("Restore of {} finished: {}", file, message);
                 update(|s| {
@@ -104,19 +106,37 @@ pub fn start(pool: PgPool, source: Source, file: String, keep_backups_off: bool)
     Ok(())
 }
 
-async fn run(pool: &PgPool, source: Source, keep_backups_off: bool) -> Result<String, String> {
+async fn run(pool: &PgPool, source: Source, keep_backups_off: bool, identity: Option<SecretIdentity>) -> Result<String, String> {
     let work = TempDir(std::env::temp_dir().join(format!("shop-restore-{}", Utc::now().format("%Y%m%d-%H%M%S"))));
     tokio::fs::create_dir_all(&work.0).await.map_err(|e| format!("Cannot create a temporary folder: {}", e))?;
     let zip_path = work.0.join("backup.zip");
+    let received = work.0.join("backup.download");
 
     match source {
         Source::GitHub { repo, token, asset_id } => {
             step("Downloading the backup from GitHub…");
-            GitHub::new(&repo, &token).download_asset(asset_id, &zip_path).await?;
+            GitHub::new(&repo, &token).download_asset(asset_id, &received).await?;
         }
         Source::Upload(bytes) => {
-            tokio::fs::write(&zip_path, &bytes).await.map_err(|e| format!("Cannot store the uploaded file: {}", e))?;
+            tokio::fs::write(&received, &bytes).await.map_err(|e| format!("Cannot store the uploaded file: {}", e))?;
         }
+    }
+
+    // Encrypted backups (`.zip.age`) are detected by their content, not by their name
+    if backup_crypto::is_encrypted(&received) {
+        let identity = identity
+            .filter(|i| !i.is_empty())
+            .ok_or("This backup is encrypted. Enter the private key (AGE-SECRET-KEY-1…) that belongs to the backup public key.")?;
+        step("Decrypting the backup…");
+        let (src, dst) = (received.clone(), zip_path.clone());
+        // The key is moved into the blocking task and dropped (zeroized) there
+        tokio::task::spawn_blocking(move || backup_crypto::decrypt_file(&src, &dst, &identity))
+            .await
+            .map_err(|e| format!("Decrypting the backup crashed: {}", e))??;
+        let _ = tokio::fs::remove_file(&received).await;
+    } else {
+        drop(identity);
+        tokio::fs::rename(&received, &zip_path).await.map_err(|e| e.to_string())?;
     }
 
     step("Checking the backup…");
