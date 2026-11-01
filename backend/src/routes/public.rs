@@ -15,7 +15,7 @@ use axum::{
     Json, Router,
 };
 use chrono::{Duration, Utc};
-use crate::services::auth;
+use crate::services::{auth, ratelimit};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sqlx::{PgPool, Row};
@@ -727,6 +727,7 @@ pub struct ResendVerificationRequest {
 /// account exists — except that email sending as a whole is unavailable.
 async fn public_resend_verification(
     State(pool): State<PgPool>,
+    headers: HeaderMap,
     Json(payload): Json<ResendVerificationRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
     let email = payload.email.trim().to_lowercase();
@@ -738,15 +739,11 @@ async fn public_resend_verification(
             format!("Please wait {} seconds before requesting another verification email.", remaining),
         ));
     }
-
-    let limiter_key = format!("verify:{}", email);
-    if auth::check_login_allowed(&limiter_key).is_err() {
-        return Err((
-            StatusCode::TOO_MANY_REQUESTS,
-            "Too many requests. Please wait a few minutes before trying again.".to_string(),
-        ));
-    }
-    auth::record_login_failure(&limiter_key); // caps resend emails per address
+    ratelimit::VERIFICATION_RESENDS.check_and_hit(&ratelimit::client_key(&headers)).map_err(ratelimit::too_many)?;
+    // At most a few emails per hour to one mailbox
+    ratelimit::EMAILS_PER_ADDRESS.check_and_hit(&format!("verify:{}", email)).map_err(|_| {
+        (StatusCode::TOO_MANY_REQUESTS, "Too many requests. Please wait a while before trying again.".to_string())
+    })?;
 
     let token = auth::random_token(32);
     let row = sqlx::query(
@@ -777,12 +774,14 @@ async fn public_resend_verification(
 
 async fn public_customer_register(
     State(pool): State<PgPool>,
+    headers: HeaderMap,
     Json(payload): Json<CustomerRegisterRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
     let email = normalize_email(&payload.email)?;
     if payload.password.len() < MIN_CUSTOMER_PASSWORD {
         return Err((StatusCode::BAD_REQUEST, format!("Password must be at least {} characters", MIN_CUSTOMER_PASSWORD)));
     }
+    ratelimit::REGISTRATIONS.check_and_hit(&ratelimit::client_key(&headers)).map_err(ratelimit::too_many)?;
 
     let full_name = payload.full_name.clone().unwrap_or_else(|| {
         let first = payload.first_name.clone().unwrap_or_default();
@@ -802,8 +801,7 @@ async fn public_customer_register(
         .unwrap_or(false);
     let verification_token = require_verification.then(|| auth::random_token(32));
 
-    let hashed = bcrypt::hash(&payload.password, bcrypt::DEFAULT_COST)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let hashed = ratelimit::hash_password(&payload.password, bcrypt::DEFAULT_COST).await?;
 
     // Never overwrite an existing account: registering with a taken email must not reset its password.
     let inserted = sqlx::query(
@@ -863,8 +861,11 @@ async fn public_customer_register(
 
 async fn public_customer_login(
     State(pool): State<PgPool>,
+    headers: HeaderMap,
     Json(payload): Json<CustomerLoginRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let client = ratelimit::client_key(&headers);
+    ratelimit::CUSTOMER_LOGIN_FAILURES.check(&client).map_err(ratelimit::too_many)?;
     let email = payload.email.trim().to_lowercase();
     let limiter_key = format!("customer:{}", email);
     auth::check_login_allowed(&limiter_key).map_err(|m| (StatusCode::TOO_MANY_REQUESTS, m))?;
@@ -881,9 +882,10 @@ async fn public_customer_login(
         Some(r) => r.get::<String, _>("password_hash"),
         None => dummy_password_hash().to_string(), // equalise timing for unknown accounts
     };
-    let valid = bcrypt::verify(&payload.password, &hash).unwrap_or(false);
+    let valid = ratelimit::verify_password(&payload.password, &hash).await?;
     let Some(r) = row.filter(|_| valid) else {
         auth::record_login_failure(&limiter_key);
+        ratelimit::CUSTOMER_LOGIN_FAILURES.hit(&client);
         return Err((StatusCode::UNAUTHORIZED, "Invalid email or password".to_string()));
     };
     auth::clear_login_failures(&limiter_key);
@@ -919,14 +921,16 @@ fn dummy_password_hash() -> &'static str {
 /// Token-based password reset. The response never reveals whether an account exists.
 async fn public_customer_reset_password(
     State(pool): State<PgPool>,
+    headers: HeaderMap,
     Json(payload): Json<ResetPasswordRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
+    ratelimit::PASSWORD_RESETS.check_and_hit(&ratelimit::client_key(&headers)).map_err(ratelimit::too_many)?;
     // Step 2: set a new password with the emailed token
     if let (Some(token), Some(new_pass)) = (payload.token.as_deref(), payload.new_password.as_deref()) {
         if new_pass.len() < MIN_CUSTOMER_PASSWORD {
             return Err((StatusCode::BAD_REQUEST, format!("Password must be at least {} characters", MIN_CUSTOMER_PASSWORD)));
         }
-        let hashed = bcrypt::hash(new_pass, bcrypt::DEFAULT_COST).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        let hashed = ratelimit::hash_password(new_pass, bcrypt::DEFAULT_COST).await?;
         let updated = sqlx::query(
             r#"
             UPDATE customers
@@ -949,9 +953,8 @@ async fn public_customer_reset_password(
 
     // Step 1: email a reset link (only the token's hash is stored)
     if let Some(email) = payload.email.as_deref().map(|e| e.trim().to_lowercase()).filter(|e| e.contains('@')) {
-        let limiter_key = format!("reset:{}", email);
-        if auth::check_login_allowed(&limiter_key).is_ok() {
-            auth::record_login_failure(&limiter_key); // also caps reset emails per address
+        // At most a few reset emails per hour to one mailbox; the answer stays the same either way
+        if ratelimit::EMAILS_PER_ADDRESS.check_and_hit(&format!("reset:{}", email)).is_ok() {
             let token = auth::random_token(32);
             let found = sqlx::query(
                 "UPDATE customers SET reset_token_hash = $1, reset_token_expires_at = NOW() + INTERVAL '1 hour' WHERE LOWER(email) = $2 RETURNING email"
@@ -1011,13 +1014,12 @@ async fn public_customer_change_password(
         }
     };
 
-    let is_valid = bcrypt::verify(&payload.current_password, &existing_hash).unwrap_or(false);
+    let is_valid = ratelimit::verify_password(&payload.current_password, &existing_hash).await?;
     if !is_valid {
         return Err((StatusCode::BAD_REQUEST, "Current password is incorrect".to_string()));
     }
 
-    let new_hash = bcrypt::hash(&payload.new_password, bcrypt::DEFAULT_COST)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let new_hash = ratelimit::hash_password(&payload.new_password, bcrypt::DEFAULT_COST).await?;
 
     sqlx::query("UPDATE customers SET password_hash = $1, updated_at = NOW() WHERE email = $2")
         .bind(&new_hash)

@@ -12,5 +12,6 @@ pub mod invoice_store;
 pub mod packing;
 pub mod payments;
 pub mod pricing;
+pub mod ratelimit;
 pub mod restore;
 pub mod vies;

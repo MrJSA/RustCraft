@@ -89,6 +89,22 @@ async fn main() -> anyhow::Result<()> {
         .layer(TraceLayer::new_for_http())
         .layer(axum::extract::DefaultBodyLimit::max(50 * 1024 * 1024));
 
+    // Debug port (published only when BACKEND_DEBUG_PORT is set): same API, but the client-IP header is
+    // dropped, so nobody on the host can pretend to be another client and dodge the per-IP limits.
+    // Only the internal port, which only the storefront and admin reach, accepts the header.
+    let debug_port: u16 = std::env::var("DEBUG_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(8001);
+    if debug_port != port {
+        let debug_app = app.clone().layer(axum::middleware::map_request(strip_client_ip));
+        let debug_addr = SocketAddr::from(([0, 0, 0, 0], debug_port));
+        let debug_listener = tokio::net::TcpListener::bind(debug_addr).await?;
+        info!("Debug listener on http://{} (client-IP header ignored)", debug_addr);
+        tokio::spawn(async move {
+            if let Err(e) = axum::serve(debug_listener, debug_app).await {
+                error!("Debug listener stopped: {}", e);
+            }
+        });
+    }
+
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     info!("Axum Server listening on http://{}", addr);
 
@@ -96,6 +112,11 @@ async fn main() -> anyhow::Result<()> {
     axum::serve(listener, app).await?;
 
     Ok(())
+}
+
+async fn strip_client_ip(mut req: axum::extract::Request) -> axum::extract::Request {
+    req.headers_mut().remove(crate::services::ratelimit::CLIENT_IP_HEADER);
+    req
 }
 
 

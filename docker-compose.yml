@@ -51,9 +51,10 @@ services:
       ADMIN_PUBLIC_URL: ${ADMIN_PUBLIC_URL:-http://localhost:4000}
       UPDATER_URL: http://updater:9000
       UPDATER_TOKEN_FILE: /secrets/updater_token
-    # Debug access from this machine only — never exposed to the network
+    # Debug access from this machine only — never exposed to the network. Port 8001 is a second listener
+    # that ignores the client-IP header, so local tools cannot dodge the per-IP limits.
     ports:
-      - "127.0.0.1:8081:8000"
+      - "127.0.0.1:8081:8001"
     volumes:
       - uploads_data:/app/uploads
       - updater_secrets:/secrets:ro
@@ -87,6 +88,10 @@ services:
       BACKEND_INTERNAL_URL: http://backend:8000
       ORIGIN: ${SHOP_PUBLIC_URL:-http://localhost:8080}
       BODY_SIZE_LIMIT: 50M
+      # Client IPs for the rate limits: X-Forwarded-For is only trusted behind a proxy on this host
+      # (PUBLISH_ADDR=127.0.0.1); TRUST_PROXY=true/false overrides it (see server.mjs)
+      PUBLISH_ADDR: ${PUBLISH_ADDR:-0.0.0.0}
+      TRUST_PROXY: ${TRUST_PROXY:-auto}
     ports:
       # PUBLISH_ADDR=127.0.0.1 when a reverse proxy (built-in or your own) serves the domains
       - "${PUBLISH_ADDR:-0.0.0.0}:${STOREFRONT_PORT:-8080}:3000"
@@ -109,6 +114,10 @@ services:
       # Public storefront URL for the "Open Storefront" and policy preview links
       SHOP_PUBLIC_URL: ${SHOP_PUBLIC_URL:-http://localhost:8080}
       BODY_SIZE_LIMIT: 50M
+      # Client IPs for the rate limits: X-Forwarded-For is only trusted behind a proxy on this host
+      # (PUBLISH_ADDR=127.0.0.1); TRUST_PROXY=true/false overrides it (see server.mjs)
+      PUBLISH_ADDR: ${PUBLISH_ADDR:-0.0.0.0}
+      TRUST_PROXY: ${TRUST_PROXY:-auto}
     ports:
       - "${PUBLISH_ADDR:-0.0.0.0}:${ADMIN_PORT:-4000}:4000"
     cap_drop: [ALL]

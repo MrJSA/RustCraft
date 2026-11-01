@@ -136,9 +136,13 @@ fn admin_session_token(admin_id: Uuid) -> Result<String, (StatusCode, String)> {
 
 async fn admin_login(
     State(pool): State<PgPool>,
+    headers: axum::http::HeaderMap,
     Json(payload): Json<AdminLoginRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
-    use crate::services::auth;
+    use crate::services::{auth, ratelimit};
+    let client = ratelimit::client_key(&headers);
+    // Per client IP first (stops guessing across accounts), then the soft per-account pause
+    ratelimit::ADMIN_LOGIN_FAILURES.check(&client).map_err(ratelimit::too_many)?;
     let username = payload.username.trim();
     let limiter_key = format!("admin:{}", username.to_lowercase());
     auth::check_login_allowed(&limiter_key).map_err(|m| (StatusCode::TOO_MANY_REQUESTS, m))?;
@@ -153,10 +157,12 @@ async fn admin_login(
     static DUMMY_HASH: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     let dummy = DUMMY_HASH.get_or_init(|| bcrypt::hash(auth::random_token(16), 12).unwrap_or_default());
     let hash = admin.as_ref().map(|a| a.get::<String, _>("password_hash")).unwrap_or_else(|| dummy.clone());
-    let password_ok = bcrypt::verify(&payload.password, &hash).unwrap_or(false);
+    let password_ok = ratelimit::verify_password(&payload.password, &hash).await?;
 
     let Some(a) = admin.filter(|_| password_ok) else {
         auth::record_login_failure(&limiter_key);
+        ratelimit::ADMIN_LOGIN_FAILURES.hit(&client);
+        tracing::warn!("Failed admin login for '{}' from {}", username, client);
         return Err((StatusCode::UNAUTHORIZED, "Invalid username or password".to_string()));
     };
     auth::clear_login_failures(&limiter_key);
@@ -237,7 +243,7 @@ async fn admin_change_credentials(
         .fetch_one(&pool)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    if !bcrypt::verify(current_password, &hash).unwrap_or(false) {
+    if !crate::services::ratelimit::verify_password(current_password, &hash).await? {
         return Err((StatusCode::UNAUTHORIZED, "Current password is incorrect".to_string()));
     }
 
@@ -267,7 +273,7 @@ async fn admin_change_credentials(
         if np == current_password {
             return Err((StatusCode::BAD_REQUEST, "The new password must differ from the current one".to_string()));
         }
-        updated_hash = bcrypt::hash(np, 12).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        updated_hash = crate::services::ratelimit::hash_password(np, 12).await?;
         is_default = false;
     } else if admin.is_default {
         return Err((StatusCode::BAD_REQUEST, "Please choose a new password of at least 12 characters before continuing".to_string()));
@@ -4329,8 +4335,7 @@ async fn admin_create_user(
     let permissions = resolve_permissions(&role, payload.permissions.as_ref())?;
     let email = admin_email_update(payload.email.as_deref(), None)?;
 
-    let password_hash = bcrypt::hash(&payload.password, 12)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let password_hash = crate::services::ratelimit::hash_password(&payload.password, 12).await?;
 
     let row = sqlx::query(&format!(
         "INSERT INTO admin_users (username, password_hash, email, role, permissions, is_default) VALUES ($1, $2, $3, $4, $5, FALSE) RETURNING {}",
@@ -4399,7 +4404,7 @@ async fn admin_update_user(
 
     let new_hash = match payload.password.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
         Some(p) if p.len() < 12 => return Err((StatusCode::BAD_REQUEST, "Password must be at least 12 characters long".to_string())),
-        Some(p) => Some(bcrypt::hash(p, 12).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?),
+        Some(p) => Some(crate::services::ratelimit::hash_password(p, 12).await?),
         None => None,
     };
 

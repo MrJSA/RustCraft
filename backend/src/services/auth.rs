@@ -90,29 +90,51 @@ pub fn bearer_token(headers: &axum::http::HeaderMap) -> Option<&str> {
 
 // ---------------------------------------------------------------- brute-force protection
 
-const MAX_FAILURES: u32 = 8;
+// Per account, failed logins only slow further attempts down (no hard lock that anyone could trigger for a
+// known username like "admin"). Mass guessing is stopped by the per-IP limits in `ratelimit`.
+/// Failures that are free before the waiting starts.
+const FREE_FAILURES: u32 = 3;
+/// Longest wait between two attempts for one account.
+const MAX_DELAY_SECS: u64 = 60;
 const WINDOW: StdDuration = StdDuration::from_secs(15 * 60);
 
-static FAILURES: OnceLock<Mutex<HashMap<String, (u32, Instant)>>> = OnceLock::new();
+/// key → (failures in the window, first failure, last failure)
+static FAILURES: OnceLock<Mutex<HashMap<String, (u32, Instant, Instant)>>> = OnceLock::new();
 
-fn failures() -> &'static Mutex<HashMap<String, (u32, Instant)>> {
+fn failures() -> &'static Mutex<HashMap<String, (u32, Instant, Instant)>> {
     FAILURES.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// Rejects further login attempts for an account after repeated failures (per account, 15 minutes).
+/// Seconds an account has to wait after `count` failures: 0, 0, 0, 1, 2, 4, 8 … up to a minute.
+fn account_delay_secs(count: u32) -> u64 {
+    if count < FREE_FAILURES {
+        0
+    } else {
+        (1u64 << (count - FREE_FAILURES).min(16)).min(MAX_DELAY_SECS)
+    }
+}
+
+/// Asks for a short pause after repeated failures of one account (per account, 15-minute window).
 pub fn check_login_allowed(key: &str) -> Result<(), String> {
-    let mut map = failures().lock().unwrap();
-    map.retain(|_, (_, since)| since.elapsed() < WINDOW);
-    match map.get(key) {
-        Some((count, _)) if *count >= MAX_FAILURES => Err("Too many failed login attempts. Please wait 15 minutes and try again.".to_string()),
+    let mut map = failures().lock().unwrap_or_else(|e| e.into_inner());
+    map.retain(|_, (_, first, _)| first.elapsed() < WINDOW);
+    let Some((count, _, last)) = map.get(key) else { return Ok(()) };
+    let delay = StdDuration::from_secs(account_delay_secs(*count));
+    match delay.checked_sub(last.elapsed()) {
+        Some(wait) if !wait.is_zero() => Err(format!(
+            "Too many failed attempts for this account. Please wait {} seconds and try again.",
+            wait.as_secs().max(1)
+        )),
         _ => Ok(()),
     }
 }
 
 pub fn record_login_failure(key: &str) {
-    let mut map = failures().lock().unwrap();
-    let entry = map.entry(key.to_string()).or_insert((0, Instant::now()));
+    let mut map = failures().lock().unwrap_or_else(|e| e.into_inner());
+    let now = Instant::now();
+    let entry = map.entry(key.to_string()).or_insert((0, now, now));
     entry.0 += 1;
+    entry.2 = now;
 }
 
 pub fn clear_login_failures(key: &str) {
@@ -172,14 +194,20 @@ mod tests {
     }
 
     #[test]
-    fn login_limiter_locks_after_repeated_failures() {
+    fn failed_logins_slow_an_account_down_but_never_lock_it() {
+        assert_eq!((0..8).map(account_delay_secs).collect::<Vec<_>>(), vec![0, 0, 0, 1, 2, 4, 8, 16]);
+        assert_eq!(account_delay_secs(40), MAX_DELAY_SECS);
+
         let key = "test:limiter";
         clear_login_failures(key);
-        for _ in 0..MAX_FAILURES {
+        for _ in 0..FREE_FAILURES {
             assert!(check_login_allowed(key).is_ok());
             record_login_failure(key);
         }
-        assert!(check_login_allowed(key).is_err());
+        // 4th failure in a row: one second pause, then the account works again
+        assert!(check_login_allowed(key).unwrap_err().contains("wait 1 seconds"));
+        std::thread::sleep(StdDuration::from_millis(1050));
+        assert!(check_login_allowed(key).is_ok());
         clear_login_failures(key);
         assert!(check_login_allowed(key).is_ok());
     }

@@ -17,7 +17,9 @@ const STRIPPED_REQUEST_HEADERS = new Set([
   'trailer',
   'cookie',
   'authorization',
-  'x-dev-mode'
+  'x-dev-mode',
+  // Set by this server only, from the real connection (rate limits per client IP)
+  'x-shop-client-ip'
 ]);
 
 const FORWARDED_RESPONSE_HEADERS = ['content-type', 'content-disposition'];
@@ -26,14 +28,24 @@ function json(body, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 }
 
-function backendHeaders(request, locals) {
+function backendHeaders(request, locals, clientIp) {
   const headers = {};
   for (const [key, value] of request.headers.entries()) {
     if (!STRIPPED_REQUEST_HEADERS.has(key.toLowerCase())) headers[key] = value;
   }
   // The only credential the backend ever sees is the session from the httpOnly cookie
   if (locals.adminToken) headers['Authorization'] = `Bearer ${locals.adminToken}`;
+  if (clientIp) headers['x-shop-client-ip'] = clientIp;
   return headers;
+}
+
+/** The visitor's address: from the reverse proxy when ADDRESS_HEADER is set (see server.js), else the TCP peer. */
+function clientAddress(getClientAddress) {
+  try {
+    return getClientAddress();
+  } catch (_) {
+    return '';
+  }
 }
 
 async function readBody(request) {
@@ -61,7 +73,7 @@ async function toClientResponse(res) {
   return new Response(await res.arrayBuffer(), { status: res.status, headers });
 }
 
-async function proxy({ params, url, request, cookies, locals }) {
+async function proxy({ params, url, request, cookies, locals, getClientAddress }) {
   const path = params.path || '';
 
   // Logout never needs the backend
@@ -80,7 +92,7 @@ async function proxy({ params, url, request, cookies, locals }) {
   try {
     res = await fetch(target, {
       method: request.method,
-      headers: backendHeaders(request, locals),
+      headers: backendHeaders(request, locals, clientAddress(getClientAddress)),
       body: await readBody(request)
     });
   } catch (err) {

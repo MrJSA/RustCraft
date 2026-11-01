@@ -293,6 +293,8 @@ async fn newsletter_subscribe(State(pool): State<PgPool>, headers: HeaderMap, Js
     if !valid_email(&email) {
         return Err(bad("Please enter a valid email address"));
     }
+    use crate::services::ratelimit;
+    ratelimit::NEWSLETTER_SIGNUPS.check_and_hit(&ratelimit::client_key(&headers)).map_err(ratelimit::too_many)?;
     let generic = Json(json!({
         "success": true,
         "message": "Almost done! Please check your inbox and click the confirmation link to activate your subscription."

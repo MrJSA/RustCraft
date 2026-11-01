@@ -15,6 +15,7 @@ WORKDIR /app
 
 COPY --from=builder /app/build ./build
 COPY --from=builder /app/package.json ./package.json
+COPY --from=builder /app/server.mjs ./server.mjs
 COPY --from=builder /app/node_modules ./node_modules
 
 # Run without root rights (the image ships the unprivileged "node" user)
@@ -25,4 +26,4 @@ ENV NODE_ENV=production
 
 EXPOSE 4000
 
-CMD ["node", "build"]
+CMD ["node", "server.mjs"]
