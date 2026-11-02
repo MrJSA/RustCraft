@@ -1,10 +1,10 @@
 # RustCraft — Rust Webshop
 
-A self-hosted webshop with a **Rust** backend (Axum, SQLx, PostgreSQL) and **SvelteKit** storefront and admin dashboard, shipped as one Docker Compose stack with one-click updates.
+A self-hosted webshop with a **Rust** backend (Axum, SQLx, PostgreSQL) and **SvelteKit** storefront and admin dashboard, shipped as one Compose stack (Docker or Podman) with signed one-click updates and encrypted backups.
 
 **See it in use:** [shop.mrjsa.com](https://shop.mrjsa.com) runs on RustCraft.
 
-> **Installing on a server?** Follow the **[Installation guide](https://github.com/MrJSA/RustCraft/wiki/Installation)** in the [wiki](https://github.com/MrJSA/RustCraft/wiki): domains, automatic HTTPS, first login, backups and updates.
+> **Installing on a server?** Follow the **[Installation guide](https://github.com/MrJSA/RustCraft/wiki/Installation)** (Docker) or **[Installation with Podman](https://github.com/MrJSA/RustCraft/wiki/Installation-with-Podman)** in the [wiki](https://github.com/MrJSA/RustCraft/wiki): domains, automatic HTTPS, first login, [encrypted backups](https://github.com/MrJSA/RustCraft/wiki/Backup-Encryption) and updates.
 
 ## Architecture
 
@@ -13,9 +13,21 @@ A self-hosted webshop with a **Rust** backend (Axum, SQLx, PostgreSQL) and **Sve
 | `backend` | Rust · Axum · SQLx | REST API, checkout, payments, emails, PDF documents, migrations |
 | `storefront` | SvelteKit | Customer shop (server-rendered, forwards API calls) |
 | `admin` | SvelteKit | Admin dashboard |
-| `db` | PostgreSQL 16 | Data (internal network only) |
-| `updater` | Rust | Checks release tags, backs up the database, rebuilds the stack |
+| `db` | PostgreSQL 16 | Data, on an internal network only the backend can reach (no internet access) |
+| `updater` | Rust | Verifies the signature of new releases, backs up the database, rebuilds the stack, rolls back if the shop does not come back healthy |
 | `proxy` (optional) | Caddy | Automatic HTTPS for the shop and admin domains |
+
+## Security
+
+| | |
+| :--- | :--- |
+| **Encrypted backups** | Backups are encrypted with [age](https://age-encryption.org) to the owner's public key before they leave the server. The server can't decrypt them; only the owner's private key can. Nothing is ever uploaded unencrypted. → [Backup Encryption](https://github.com/MrJSA/RustCraft/wiki/Backup-Encryption) |
+| **Signed updates** | Installations only install release tags signed with a key the *installed* version trusts (`deploy/updater/allowed_signers`), back up the database first and roll back automatically. → [Updates](https://github.com/MrJSA/RustCraft/wiki/Updates) |
+| **Logins** | Limits per visitor IP (failed logins, registrations, password resets, newsletter sign-ups); failed logins slow an account down instead of locking it; password hashing on a bounded number of cores. |
+| **Containers** | Backend, storefront and admin run without root and with dropped capabilities; the database is isolated; migrations are all-or-nothing; backup restores run only SQL. |
+| **Admin** | Session in an httpOnly cookie only, role and per-section permissions, no development bypasses. |
+
+Details and what you should do yourself: [Security](https://github.com/MrJSA/RustCraft/wiki/Security). Please report vulnerabilities privately, not in a public issue.
 
 ## Local development
 
@@ -84,8 +96,8 @@ Database migrations run automatically when the backend starts.
 - Product weights and weight-based shipping rates; delivery times; product safety information (GPSR).
 - VAT-free orders for EU businesses with a live VIES check (intra-Community supply / reverse charge).
 - Withdrawal button with confirmation emails, invoices stored unchangeable and credit notes on refunds.
-- Automatic daily, weekly or monthly backups of the complete database and all uploads to a private GitHub repository (see [Backups](https://github.com/MrJSA/RustCraft/wiki/Backups)).
-- Updates from the admin with an automatic database backup (see [Updates](https://github.com/MrJSA/RustCraft/wiki/Updates)), on the stable or the beta channel.
+- Automatic daily, weekly or monthly backups of the complete database and all uploads to a private GitHub repository, **encrypted with age** to your own key, which you create and test from the admin (see [Backups](https://github.com/MrJSA/RustCraft/wiki/Backups) and [Backup Encryption](https://github.com/MrJSA/RustCraft/wiki/Backup-Encryption)). Restore from the admin with your private key, which is never stored.
+- Signed updates from the admin with an automatic database backup and automatic rollback (see [Updates](https://github.com/MrJSA/RustCraft/wiki/Updates)), on the stable or the beta channel.
 
 ## Bugs and feature requests
 
@@ -95,20 +107,31 @@ Please read the [rules for issues](https://github.com/MrJSA/RustCraft/wiki/Repor
 
 | Branch | Tags | Installations on |
 | :--- | :--- | :--- |
-| `master` | `v1.6.0` | **Stable** channel (default, for live shops) |
-| `beta` | `v1.6.0-beta.1` | **Beta** channel (testing, *Settings → System & Updates → Update channel*) |
+| `master` | `v1.8.0` | **Stable** channel (default, for live shops) |
+| `beta` | `v1.9.0-beta.1` | **Beta** channel (testing, *Settings → System & Updates → Update channel*) |
 
-Development and pull requests go to `beta`. See [Release Channels](https://github.com/MrJSA/RustCraft/wiki/Release-Channels) for details.
+Development and pull requests go to `beta`. See [Release Channels](https://github.com/MrJSA/RustCraft/wiki/Release-Channels) for details,
+including the one-time setup for signing.
 
-1. **Beta:** on `beta`, set `VERSION` (e.g. `1.6.0-beta.1`), commit, then
+Every release tag must be **signed** (`git tag -s`) with a key listed in `deploy/updater/allowed_signers`; installations refuse
+anything else.
+
+1. **Beta:** on `beta`, set `VERSION` (e.g. `1.9.0-beta.1`), commit, then
    ```bash
-   git tag -s v1.6.0-beta.1 -m "What is new in this beta"   # signed, see Release Channels
+   git tag -s v1.9.0-beta.1 -m "What is new in this beta"
+   git verify-tag v1.9.0-beta.1                     # must print: Good "git" signature
    git push origin beta --follow-tags
+   gh release create v1.9.0-beta.1 --verify-tag --prerelease --title v1.9.0-beta.1 \
+     --notes "$(git tag -l --format='%(contents:subject)%0a%0a%(contents:body)' v1.9.0-beta.1)"
    ```
-2. **Stable:** merge `beta` into `master`, set `VERSION` (e.g. `1.6.0`), commit, then
+2. **Stable:** merge `beta` into `master`, set `VERSION` (e.g. `1.9.0`), commit, then
    ```bash
-   git tag -s v1.6.0 -m "What changed in this release"
+   git tag -s v1.9.0 -m "What changed in this release"
+   git verify-tag v1.9.0
    git push origin master --follow-tags
+   gh release create v1.9.0 --verify-tag --latest --title v1.9.0 \
+     --notes "$(git tag -l --format='%(contents:subject)%0a%0a%(contents:body)' v1.9.0)"
    ```
    and merge `master` back into `beta`.
-3. Installations on the matching channel now offer *Update now* in *Settings → System & Updates*.
+3. Installations on the matching channel now offer *Update now* in *Settings → System & Updates*. The tag message is
+   shown there as the release notes; mention when installations have to rebuild the updater.
