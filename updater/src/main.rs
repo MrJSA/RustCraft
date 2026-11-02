@@ -371,7 +371,7 @@ async fn check(State(state): State<Shared>, headers: HeaderMap) -> ApiResult {
     let channel = current_channel(&state.repo).await;
     let latest = latest_tag(&tags, channel);
     let notes = match &latest {
-        Some(v) => run(&state.repo, "git", &["tag", "-l", "--format=%(contents)", &format!("v{}", v)]).await.unwrap_or_default(),
+        Some(v) => run(&state.repo, "git", &["tag", "-l", "--format=%(contents:subject)%0a%0a%(contents:body)", &format!("v{}", v)]).await.unwrap_or_default(),
         None => String::new(),
     };
     Ok(Json(json!({
