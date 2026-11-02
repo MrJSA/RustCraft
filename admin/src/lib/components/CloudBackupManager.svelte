@@ -484,9 +484,11 @@
         <button type="button" on:click={downloadKeyTest} disabled={testing_key || !foundKeys.length} class="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-white font-bold flex items-center gap-1.5">
           {#if testing_key}<Loader2 size={13} class="animate-spin" />{:else}<Lock size={13} />{/if} Test the key
         </button>
-        <span class="text-[11px] text-slate-500">Downloads a small encrypted file. Open it on your computer:</span>
+        <span class="text-[11px] text-slate-500">Downloads a small encrypted file. Open it on your computer, in the folder it was downloaded to, with the <strong class="text-slate-300">full path</strong> to your key file:</span>
       </div>
-      <code class="block px-2.5 py-1.5 rounded-lg bg-slate-900 text-slate-200 text-[11px] select-all">age -d -i shop-backup-key.txt backup-key-test.txt.age</code>
+      <code class="block px-2.5 py-1.5 rounded-lg bg-slate-900 text-slate-200 text-[11px] select-all whitespace-pre-wrap">{keyOs === 'windows' ? 'cd $HOME\\Downloads' : 'cd ~/Downloads'}
+age -d -i {keyOs === 'windows' ? 'C:\\path\\to\\shop-backup-key.txt' : '/path/to/shop-backup-key.txt'} backup-key-test.txt.age</code>
+      <p class="text-[11px] text-slate-500">Replace the path with where your key file is. <em>failed to open file</em> means age can't find the key file at that path.</p>
       <p class="text-[11px] text-slate-500">
         It prints <strong class="text-slate-300">It works!</strong> → your private key opens the backups. An error like <em>no identity matched any of the recipients</em> means
         the public key above does not belong to that key file.
