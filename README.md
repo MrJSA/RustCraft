@@ -102,12 +102,12 @@ Development and pull requests go to `beta`. See [Release Channels](https://githu
 
 1. **Beta:** on `beta`, set `VERSION` (e.g. `1.6.0-beta.1`), commit, then
    ```bash
-   git tag -a v1.6.0-beta.1 -m "What is new in this beta"
+   git tag -s v1.6.0-beta.1 -m "What is new in this beta"   # signed, see Release Channels
    git push origin beta --follow-tags
    ```
 2. **Stable:** merge `beta` into `master`, set `VERSION` (e.g. `1.6.0`), commit, then
    ```bash
-   git tag -a v1.6.0 -m "What changed in this release"
+   git tag -s v1.6.0 -m "What changed in this release"
    git push origin master --follow-tags
    ```
    and merge `master` back into `beta`.
