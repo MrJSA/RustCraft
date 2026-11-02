@@ -410,6 +410,10 @@
         </button>
         {#if showKeyHelp}
           <div class="px-4 pb-4 space-y-3 text-[11px] text-slate-400 leading-relaxed">
+            <p>
+              The short version is below. Every command, how to keep the key safe, restores and an emergency key are in the
+              <a href="https://github.com/MrJSA/RustCraft/wiki/Backup-Encryption" target="_blank" rel="noopener noreferrer" class="text-sky-400 hover:underline">detailed guide in the wiki</a>.
+            </p>
             <div class="flex gap-1.5">
               {#each [['windows', 'Windows'], ['mac', 'macOS'], ['linux', 'Linux']] as [id, label]}
                 <button type="button" on:click={() => (keyOs = id)} class="px-3 py-1.5 rounded-lg font-bold {keyOs === id ? 'bg-sky-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}">{label}</button>
