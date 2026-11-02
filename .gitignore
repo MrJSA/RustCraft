@@ -9,3 +9,9 @@ node_modules/
 build/
 dist/
 /backups/
+
+# Never commit backup keys or downloaded backups (they contain customer data)
+*backup-key*.txt
+shop-backup-*.zip
+shop-backup-*.zip.age
+*.zip.age
