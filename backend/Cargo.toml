@@ -33,5 +33,5 @@ lopdf = { version = "0.46.0", default-features = false }
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
 ttf-parser = "0.25"
 # Off-site backups are encrypted to the shop owner's age public key
-age = "0.11"
+age = { version = "0.12.1", default-features = false }
 zeroize = "1"

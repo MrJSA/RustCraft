@@ -86,7 +86,61 @@
     }
   }
 
+  // ---------------------------------------------------------------- encryption key
+  // age public keys: "age1" + 58 bech32 characters. Picked out of whatever is pasted
+  // (the bare key, age-keygen's "Public key: age1…" line or the "# public key:" comment of a key file).
+  const PUBLIC_KEY = /age1[02-9ac-hj-np-z]{58}/gi;
+  let showKeyHelp = false;
+  let keyOs = typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform) ? 'mac' : typeof navigator !== 'undefined' && /Win/i.test(navigator.platform) ? 'windows' : 'linux';
+  let privateKeyBlocked = false;
+  let testing_key = false;
+
+  // A private key must never leave the browser: clear the field before anything can be sent
+  $: if (/AGE-SECRET-KEY-/i.test(recipient)) {
+    recipient = '';
+    privateKeyBlocked = true;
+  }
+  $: foundKeys = [...new Set((recipient.match(PUBLIC_KEY) || []).map((k) => k.toLowerCase()))];
+  $: savedKeys = (status?.encryption_recipient || '').split(/\s+/).filter(Boolean);
+  $: keysChanged = foundKeys.join('\n') !== savedKeys.join('\n');
+  $: keyInputInvalid = recipient.trim() !== '' && foundKeys.length === 0;
+
+  /** Downloads a small file encrypted to the entered key(s); it is opened with the private key on the owner's computer. */
+  async function downloadKeyTest() {
+    testing_key = true;
+    error = '';
+    notice = '';
+    try {
+      const res = await fetch('/api/v1/admin/backup/encryption-test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ encryption_recipient: foundKeys.join('\n') })
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `Request failed (${res.status})`);
+      }
+      const url = URL.createObjectURL(await res.blob());
+      const a = Object.assign(document.createElement('a'), { href: url, download: 'backup-key-test.txt.age' });
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      notice = 'Test file downloaded. Open it with your private key as shown below — if you can read "It works!", your key pair is ready.';
+    } catch (e) {
+      error = e.message;
+    } finally {
+      testing_key = false;
+    }
+  }
+
   async function save() {
+    if (keysChanged && savedKeys.length && foundKeys.length) {
+      if (!confirm('Change the encryption key?\n\nNew backups are encrypted to the new key. Backups that are already on GitHub can still only be opened with the OLD private key — keep the old key file as long as you keep those backups.')) return;
+    }
+    if (keysChanged && savedKeys.length && !foundKeys.length) {
+      if (!confirm('Remove the encryption key?\n\nWithout a public key NO backups are made any more (backups are only uploaded encrypted).')) return;
+    }
     saving = true;
     error = '';
     notice = '';
@@ -101,7 +155,7 @@
           backup_hour_utc: Number(hourUtc),
           keep_count: Number(keepCount),
           include_media: includeMedia,
-          encryption_recipient: recipient
+          encryption_recipient: foundKeys.join('\n')
         })
       });
       token = '';
@@ -331,18 +385,111 @@
     </div>
 
     <!-- Encryption -->
-    <div class="p-4 rounded-2xl bg-slate-950 border {status?.encrypted ? 'border-emerald-500/30' : 'border-slate-800'} space-y-2 text-xs">
-      <div class="font-bold text-slate-200 flex items-center gap-1.5">
-        <Lock size={14} class={status?.encrypted ? 'text-emerald-400' : 'text-slate-500'} /> Encryption
-        {#if status?.encrypted}<span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">ON</span>{/if}
+    <div class="p-4 rounded-2xl bg-slate-950 border {status?.encrypted ? 'border-emerald-500/30' : 'border-amber-500/30'} space-y-3 text-xs">
+      <div class="flex items-start justify-between gap-3 flex-wrap">
+        <div>
+          <div class="font-bold text-slate-200 flex items-center gap-1.5">
+            <Lock size={14} class={status?.encrypted ? 'text-emerald-400' : 'text-amber-400'} /> Encryption
+            {#if status?.encrypted}
+              <span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">ON · {status.encryption_key_count} key{status.encryption_key_count === 1 ? '' : 's'}</span>
+            {:else}
+              <span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-300 border border-amber-500/30">required</span>
+            {/if}
+          </div>
+          <p class="text-[11px] text-slate-500 mt-1 leading-relaxed max-w-2xl">
+            Backups are encrypted on this server with your <strong class="text-slate-300">public key</strong> before they go to GitHub (files end in <code>.zip.age</code>).
+            Only your <strong class="text-slate-300">private key</strong>, which never leaves your computer, can open them — a leaked GitHub token or a hacked GitHub account exposes nothing readable.
+          </p>
+        </div>
       </div>
-      <label for="backup-recipient" class="block font-semibold text-slate-400">age public key</label>
-      <input id="backup-recipient" type="text" bind:value={recipient} placeholder="age1…" autocomplete="off" spellcheck="false" class={inputClass} />
-      <p class="text-[11px] text-slate-500 leading-relaxed">
-        Backups are encrypted with this <strong class="text-slate-300">public</strong> key before they leave the server (files end in <code>.zip.age</code>).
-        Only the matching private key (<code>AGE-SECRET-KEY-1…</code>) can open them. <strong class="text-slate-300">Never enter the private key here</strong> —
-        keep it offline in two places; you need it to restore. Create both with <code>age-keygen -o shop-backup-key.txt</code>
-        (<a href="https://github.com/MrJSA/RustCraft/wiki/Backups" target="_blank" rel="noopener noreferrer" class="text-sky-400 hover:underline">guide</a>).
+
+      <!-- Step-by-step: create a key on your own computer -->
+      <div class="rounded-xl border border-slate-800">
+        <button type="button" on:click={() => (showKeyHelp = !showKeyHelp)} class="w-full px-3.5 py-2.5 flex items-center gap-2 font-bold text-slate-300 hover:text-white">
+          <HelpCircle size={14} class="text-sky-400" /> How do I get a key? (about 3 minutes, on your own computer)
+        </button>
+        {#if showKeyHelp}
+          <div class="px-4 pb-4 space-y-3 text-[11px] text-slate-400 leading-relaxed">
+            <div class="flex gap-1.5">
+              {#each [['windows', 'Windows'], ['mac', 'macOS'], ['linux', 'Linux']] as [id, label]}
+                <button type="button" on:click={() => (keyOs = id)} class="px-3 py-1.5 rounded-lg font-bold {keyOs === id ? 'bg-sky-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}">{label}</button>
+              {/each}
+            </div>
+            <ol class="list-decimal list-inside space-y-2.5">
+              <li>
+                Install <a href="https://age-encryption.org" target="_blank" rel="noopener noreferrer" class="text-sky-400 hover:underline">age</a> — free, open source, nothing to sign up for:
+                {#if keyOs === 'windows'}
+                  open <strong class="text-slate-300">PowerShell</strong> and run
+                  <code class="block mt-1 px-2.5 py-1.5 rounded-lg bg-slate-900 text-slate-200 select-all">winget install FiloSottile.age</code>
+                  then close PowerShell and open a <strong class="text-slate-300">new</strong> window (so it finds the program).
+                {:else if keyOs === 'mac'}
+                  open <strong class="text-slate-300">Terminal</strong> and run (needs <a href="https://brew.sh" target="_blank" rel="noopener noreferrer" class="text-sky-400 hover:underline">Homebrew</a>)
+                  <code class="block mt-1 px-2.5 py-1.5 rounded-lg bg-slate-900 text-slate-200 select-all">brew install age</code>
+                {:else}
+                  open a terminal and run (Debian/Ubuntu; Fedora: <code>sudo dnf install age</code>)
+                  <code class="block mt-1 px-2.5 py-1.5 rounded-lg bg-slate-900 text-slate-200 select-all">sudo apt install age</code>
+                {/if}
+              </li>
+              <li>
+                Create your key pair:
+                <code class="block mt-1 px-2.5 py-1.5 rounded-lg bg-slate-900 text-slate-200 select-all">age-keygen -o shop-backup-key.txt</code>
+                It prints <code>Public key: age1…</code> — that is the <strong class="text-slate-300">public key</strong>. Copy it (the whole line is fine) into the field below.
+              </li>
+              <li>
+                The file <code>shop-backup-key.txt</code> holds your <strong class="text-slate-300">private key</strong>. Without it no backup can ever be restored, so keep it in
+                <strong class="text-slate-300">two places</strong>: your password manager <em>and</em> somewhere else that is not this server (e.g. a USB stick in a drawer).
+                Never upload it to the shop or to GitHub, and don't send it by e-mail.
+              </li>
+              <li>Click <em>Test the key</em> below, then <em>Save backup settings</em>.</li>
+            </ol>
+          </div>
+        {/if}
+      </div>
+
+      {#if privateKeyBlocked}
+        <div class="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-200 text-[11px] leading-relaxed flex items-start gap-2">
+          <ShieldAlert size={15} class="flex-shrink-0 text-rose-400" />
+          <span>
+            <strong class="text-rose-300">That was your private key</strong> (<code>AGE-SECRET-KEY-…</code>). It was removed from the field and <strong>not sent</strong> to the shop.
+            Paste only the line <code>Public key: age1…</code> that <code>age-keygen</code> printed (it is also in the key file, after <code># public key:</code>).
+            <button type="button" on:click={() => (privateKeyBlocked = false)} class="underline ml-1">OK</button>
+          </span>
+        </div>
+      {/if}
+
+      <div>
+        <label for="backup-recipient" class="block font-semibold text-slate-400 mb-1">Your public key</label>
+        <textarea
+          id="backup-recipient"
+          rows="2"
+          bind:value={recipient}
+          placeholder="age1…   (or paste the line: Public key: age1…)"
+          autocomplete="off"
+          spellcheck="false"
+          class="{inputClass} resize-y"
+        ></textarea>
+        <div class="text-[11px] mt-1 {keyInputInvalid ? 'text-rose-300' : 'text-slate-500'}">
+          {#if keyInputInvalid}
+            No public key found — it starts with <code>age1</code> and is 62 characters long.
+          {:else if foundKeys.length}
+            {foundKeys.length} public key{foundKeys.length === 1 ? '' : 's'} recognized{#if keysChanged && savedKeys.length} (changed — not saved yet){:else if keysChanged} (not saved yet){/if}.
+            {#if foundKeys.length > 1}Every backup is encrypted to all of them; each matching private key opens it.{/if}
+          {:else}
+            One key per line. Add a second key (e.g. an emergency key kept in a safe) if you like: each matching private key opens the backups.
+          {/if}
+        </div>
+      </div>
+
+      <div class="flex flex-wrap items-center gap-2">
+        <button type="button" on:click={downloadKeyTest} disabled={testing_key || !foundKeys.length} class="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-white font-bold flex items-center gap-1.5">
+          {#if testing_key}<Loader2 size={13} class="animate-spin" />{:else}<Lock size={13} />{/if} Test the key
+        </button>
+        <span class="text-[11px] text-slate-500">Downloads a small encrypted file. Open it on your computer:</span>
+      </div>
+      <code class="block px-2.5 py-1.5 rounded-lg bg-slate-900 text-slate-200 text-[11px] select-all">age -d -i shop-backup-key.txt backup-key-test.txt.age</code>
+      <p class="text-[11px] text-slate-500">
+        It prints <strong class="text-slate-300">It works!</strong> → your private key opens the backups. An error like <em>no identity matched any of the recipients</em> means
+        the public key above does not belong to that key file.
       </p>
     </div>
 

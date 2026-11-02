@@ -68,11 +68,11 @@ impl BackupSettings {
         !self.encryption_recipient.trim().is_empty()
     }
 
-    /// Shown in the admin while backups leave the server unencrypted.
+    /// Shown in the admin while automatic backups are on but cannot run for lack of a public key.
     pub fn encryption_warning(&self) -> Option<&'static str> {
         (self.enabled && !self.is_encrypted()).then_some(
-            "Backups are uploaded UNENCRYPTED: they contain names, addresses and orders of your customers. \
-             Enter an age public key to encrypt them — unencrypted uploads will be refused in a future version.",
+            "No backups are made: backups contain your customers' names, addresses and orders and are only uploaded \
+             encrypted. Enter your age public key below (see \"How do I get a key?\").",
         )
     }
 
@@ -127,6 +127,7 @@ impl BackupSettings {
             "last_size_bytes": self.last_size_bytes,
             "last_url": self.last_url,
             "encryption_recipient": self.encryption_recipient,
+            "encryption_key_count": crate::services::backup_crypto::recipient_count(&self.encryption_recipient),
             "encrypted": self.is_encrypted(),
             "encryption_warning": self.encryption_warning(),
             "releases_url": (!self.github_repo.is_empty()).then(|| format!("https://github.com/{}/releases", self.github_repo)),
@@ -271,6 +272,10 @@ async fn create_backup(pool: &PgPool, settings: &BackupSettings) -> Result<Backu
     if !settings.is_configured() {
         return Err("No GitHub repository or access token is configured.".to_string());
     }
+    // Checked first: nothing unencrypted ever leaves the server
+    if !settings.is_encrypted() {
+        return Err("No age public key is set: backups are only uploaded encrypted. Enter your public key (age1…) in Settings → Export & Backups.".to_string());
+    }
     let gh = GitHub::new(&settings.github_repo, &settings.github_token);
     let repo = gh.check_repo().await?;
     if let Some(expiry) = &repo.token_expires_at {
@@ -309,20 +314,14 @@ async fn create_backup(pool: &PgPool, settings: &BackupSettings) -> Result<Backu
         .map_err(|e| format!("Creating the backup archive crashed: {}", e))??;
     let _ = tokio::fs::remove_file(&dump_path).await;
 
-    // Encrypt to the owner's public key: GitHub (and anyone with the token) only ever sees ciphertext
-    let (upload_path, file_name) = if settings.is_encrypted() {
-        let encrypted_name = format!("{}{}", file_name, crate::services::backup_crypto::ENCRYPTED_SUFFIX);
-        let encrypted_path = work.0.join(&encrypted_name);
-        let (src, dst, key) = (zip_path.clone(), encrypted_path.clone(), settings.encryption_recipient.trim().to_string());
-        tokio::task::spawn_blocking(move || crate::services::backup_crypto::encrypt_file(&src, &dst, &key))
-            .await
-            .map_err(|e| format!("Encrypting the backup crashed: {}", e))??;
-        let _ = tokio::fs::remove_file(&zip_path).await;
-        (encrypted_path, encrypted_name)
-    } else {
-        warn!("Backup is uploaded unencrypted — set an age public key in Settings → Export & Backups");
-        (zip_path, file_name)
-    };
+    // Encrypt to the owner's public key(s): GitHub (and anyone with the token) only ever sees ciphertext
+    let file_name = format!("{}{}", file_name, crate::services::backup_crypto::ENCRYPTED_SUFFIX);
+    let upload_path = work.0.join(&file_name);
+    let (src, dst, keys) = (zip_path.clone(), upload_path.clone(), settings.encryption_recipient.clone());
+    tokio::task::spawn_blocking(move || crate::services::backup_crypto::encrypt_file(&src, &dst, &keys))
+        .await
+        .map_err(|e| format!("Encrypting the backup crashed: {}", e))??;
+    let _ = tokio::fs::remove_file(&zip_path).await;
 
     let size = tokio::fs::metadata(&upload_path).await.map_err(|e| e.to_string())?.len();
     if size > MAX_ASSET_BYTES {
@@ -338,7 +337,7 @@ async fn create_backup(pool: &PgPool, settings: &BackupSettings) -> Result<Backu
         "Automatic backup of **{}**.\n\n- Database: complete dump (`database.sql`)\n- Uploaded files: {}\n- Encryption: {}\n- Size: {}\n\nTo restore: shop admin → Settings → Export & Backups → Restore a Backup (see https://github.com/MrJSA/RustCraft/wiki/Restoring-a-Backup).",
         if store_name.is_empty() { "the shop" } else { &store_name },
         if settings.include_media { format!("{} file(s) in `uploads/`", file_count) } else { "not included".to_string() },
-        if settings.is_encrypted() { "age (needs the private key of the shop owner)" } else { "**none — this file contains readable customer data**" },
+        "age (only the shop owner's private key opens it)",
         human_size(size)
     );
     let release = gh.create_draft_release(&tag, &title, &body).await?;
@@ -355,9 +354,6 @@ async fn create_backup(pool: &PgPool, settings: &BackupSettings) -> Result<Backu
     })?;
 
     let mut notes = Vec::new();
-    if !settings.is_encrypted() {
-        notes.push("WARNING: not encrypted — set an age public key.".to_string());
-    }
     match gh.prune(settings.keep_count.max(1) as usize).await {
         Ok(0) => {}
         Ok(n) => notes.push(format!("{} old backup(s) removed.", n)),

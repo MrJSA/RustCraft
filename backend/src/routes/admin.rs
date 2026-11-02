@@ -112,6 +112,7 @@ pub fn admin_router(pool: PgPool) -> Router<PgPool> {
         .route("/backup/settings", get(admin_get_backup_settings).put(admin_update_backup_settings))
         .route("/backup/test", post(admin_test_backup_connection))
         .route("/backup/run", post(admin_run_backup))
+        .route("/backup/encryption-test", post(admin_backup_encryption_test))
         .route("/backup/disconnect", post(admin_disconnect_backup))
         .route("/backup/restore/list", post(admin_list_restorable_backups))
         .route("/backup/restore/github", post(admin_restore_from_github))
@@ -4671,11 +4672,11 @@ async fn admin_update_backup_settings(
     let include_media = payload.include_media.unwrap_or(current.include_media);
     let recipient = match payload.encryption_recipient.as_deref().map(str::trim) {
         Some("") => String::new(),
-        Some(k) => crate::services::backup_crypto::normalize_recipient(k).map_err(|e| (StatusCode::BAD_REQUEST, e))?,
+        Some(k) => crate::services::backup_crypto::normalize_recipients(k).map_err(|e| (StatusCode::BAD_REQUEST, e))?,
         None => current.encryption_recipient.clone(),
     };
-    // New setups must encrypt; shops that already upload backups get a warning until they add a key
-    if enabled && recipient.is_empty() && (!current.enabled || !current.encryption_recipient.is_empty()) {
+    // Backups are only ever uploaded encrypted (like HarmonicFlow): no public key, no automatic backups
+    if enabled && recipient.is_empty() {
         return Err((
             StatusCode::BAD_REQUEST,
             "Backups contain customer data: enter an age public key (age1…) so they are encrypted before they leave the server.".to_string(),
@@ -4769,6 +4770,9 @@ async fn admin_run_backup(
     if !s.is_configured() {
         return Err((StatusCode::BAD_REQUEST, "Connect a GitHub repository first".to_string()));
     }
+    if !s.is_encrypted() {
+        return Err((StatusCode::BAD_REQUEST, "Enter your age public key first: backups are only uploaded encrypted.".to_string()));
+    }
     if backup::is_running() {
         return Err((StatusCode::CONFLICT, "A backup is already running".to_string()));
     }
@@ -4780,6 +4784,46 @@ async fn admin_run_backup(
         let _ = backup::run_backup(&pool).await;
     });
     Ok((StatusCode::ACCEPTED, Json(json!({ "started": true }))))
+}
+
+#[derive(Deserialize)]
+struct EncryptionTestRequest {
+    /// Public key(s) from the form, so a key can be tested before it is saved; empty = the saved ones
+    encryption_recipient: Option<String>,
+}
+
+/// A small file encrypted to the public key(s). The owner opens it on their own computer with the private key
+/// (`age -d -i shop-backup-key.txt …`), which proves the key pair works — the private key never comes here.
+async fn admin_backup_encryption_test(
+    State(pool): State<PgPool>,
+    Extension(admin): Extension<CurrentAdmin>,
+    Json(payload): Json<EncryptionTestRequest>,
+) -> Result<Response, (StatusCode, String)> {
+    use crate::services::backup_crypto;
+    require_backup_admin(&admin)?;
+    let keys = match payload.encryption_recipient.as_deref().map(str::trim).filter(|k| !k.is_empty()) {
+        Some(k) => backup_crypto::normalize_recipients(k).map_err(|e| (StatusCode::BAD_REQUEST, e))?,
+        None => crate::services::backup::BackupSettings::load(&pool).await.map_err(backup_db_err)?.encryption_recipient,
+    };
+    if keys.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "Enter your age public key (age1…) first.".to_string()));
+    }
+    let store_name: String = sqlx::query_scalar("SELECT store_name FROM store_settings WHERE id = 1")
+        .fetch_optional(&pool)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let file = backup_crypto::encrypt_test_file(&keys, &store_name, &Utc::now().format("%Y-%m-%d %H:%M UTC").to_string())
+        .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    Ok((
+        [
+            (CONTENT_TYPE, HeaderValue::from_static("application/octet-stream")),
+            (axum::http::header::CONTENT_DISPOSITION, HeaderValue::from_static("attachment; filename=\"backup-key-test.txt.age\"")),
+        ],
+        file,
+    )
+        .into_response())
 }
 
 /// Removes the token and switches automatic backups off. Existing backups on GitHub stay untouched.
