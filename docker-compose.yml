@@ -1,10 +1,14 @@
 # Fixed project name so the built-in updater manages exactly this stack
 name: rustwebshop
 
-# Hardening shared by all services: no privilege escalation (setuid binaries), bounded log files
+# Shared by all services: bounded log files and, opt-in, no privilege escalation through setuid binaries.
+# NO_NEW_PRIVILEGES stays off by default: with Podman on AppArmor systems (e.g. Debian 13) it blocks all
+# signals between processes inside a container, so PostgreSQL cannot start and helper processes cannot be
+# stopped. The containers are protected anyway (non-root users, dropped capabilities, AppArmor). Turn it on
+# with NO_NEW_PRIVILEGES=true on Docker.
 x-hardening: &hardening
   security_opt:
-    - no-new-privileges:true
+    - no-new-privileges:${NO_NEW_PRIVILEGES:-false}
   logging:
     driver: json-file
     options:

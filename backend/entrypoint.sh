@@ -7,6 +7,6 @@ if [ "$(id -u)" = "0" ]; then
     if [ "$(stat -c %u /app/uploads)" != "10001" ]; then
         chown -R shop:shop /app/uploads
     fi
-    exec setpriv --reuid=shop --regid=shop --init-groups --no-new-privs /app/backend "$@"
+    exec setpriv --reuid=shop --regid=shop --init-groups /app/backend "$@"
 fi
 exec /app/backend "$@"
